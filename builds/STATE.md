@@ -1,40 +1,46 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-13 (Bootstrap)
-**Current milestone:** v0.1 (next to ship)
-**Roadmap progress:** 1/10 milestones merged
+**Last updated:** 2026-05-13 (Run #001)
+**Current milestone:** v0.2 (next to ship)
+**Roadmap progress:** 2/10 milestones merged
 
 ## Currently in flight
 
-(None)
+(None — run #001 closed cleanly.)
 
 ## Next up
 
-- **v0.1: Setup wizard step 1** — paste Anthropic key, name your instance.
-  - Route: `/setup` (or `/setup/welcome`)
-  - First-run detector: if no `ANTHROPIC_API_KEY` in env AND no `app_config` row in DB, redirect home → setup
-  - Persist API key validation result (don't store the key in DB — it stays in Vercel env vars / .env.local)
-  - Persist app name (display name) to Supabase `app_config` table
-  - Smoke test the key with a `claude-haiku-4-5` hello-world before saving
+- **v0.2: Supabase Marketplace integration + auto-migrations + UI shell with nav.**
+  - Wire Supabase via the Vercel Marketplace (auto-provisions `NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY`)
+  - First migration: `app_config` table (id, name, validated_at, updated_at) + `prospects` skeleton + `audit_log` skeleton
+  - Auto-migrate on first server boot if the schema is missing (idempotent)
+  - UI shell: top nav with logo + section links (Dashboard / Setup / Settings — Dashboard is just a placeholder for now)
+  - Swap `lib/app-config.ts` from cookie-backed to Supabase-backed (the abstraction was designed for this)
+  - First-run detector now checks `app_config` row + the cookie can be retired
 
 ## Blocked / awaiting input
 
-- **None.** v0.1 is purely a UI + Anthropic API call. No external decisions needed.
+- **`next lint` script is dead** — Next 16 removed it. Pick (a) direct `eslint .` + ESLint devDep, (b) Biome, or (c) drop. Affects the self-test gate from v0.2 onward.
+- **Cookie `secure: true` breaks localhost dev** — relax to `secure: process.env.NODE_ENV === "production"` or accept HTTPS-only dev. One-line fix; can land as part of v0.2 cleanup.
+- **No `ANTHROPIC_API_KEY` in orchestrator env** — future LLM-touching milestones (v0.3 voice calibration, v0.4 drafter, v0.5 judge) need a real key for live smoke tests. Add to `.env.local` before run #003 or accept mocked-only verification on those.
 
 ## Recent learnings
 
-(None yet — bootstrap state.)
+1. `gh pr merge --delete-branch` aborts at the local-checkout step when `main` is checked out in another worktree. The server-side merge still succeeds — orchestrator must follow up with `git push origin --delete <branch>` to clean the remote.
+2. Agent did not auto-commit its work before reporting COMPLETE. Future agent prompts must require `git status` clean as part of self-test.
+3. Storage abstraction `lib/app-config.ts` is the seam for v0.1→v0.2 swap. Cookie at v0.1, Supabase at v0.2 — the call sites in `app/page.tsx` and `app/setup/actions.ts` should not change shape during v0.2.
+4. `@anthropic-ai/sdk@^0.95.2` is the working version as of 2026-05-13. SDK exports `AuthenticationError`, `RateLimitError`, `APIConnectionError` for error mapping.
 
 ## Files most recently touched
 
-- v0.0.1 scaffold: package.json, app/layout.tsx, app/page.tsx, app/api/health/route.ts, README.md, PLAN.md (commits `224b024`, `1e33741` on `main`)
+- v0.1 (run #001): `app/setup/page.tsx`, `app/setup/actions.ts`, `lib/anthropic.ts`, `lib/app-config.ts`, `lib/app-config.test.ts`, `app/page.tsx`, `README.md`, `package.json`, `package-lock.json` (PR #1, commit `1f87cf1e`)
 
 ## Milestone map (synced from PLAN.md roadmap)
 
 | Version | Description | Status | Run merged | PR |
 |---|---|---|---|---|
 | v0.0.1 | Scaffold — Next.js 16 app, Deploy button, health route | MERGED | (bootstrap) | `224b024` (root commit, no PR) |
-| v0.1 | Setup wizard step 1 — paste Anthropic key, name your instance | NOT_STARTED | — | — |
+| v0.1 | Setup wizard step 1 — paste Anthropic key, name your instance | MERGED | #001 (2026-05-13) | [#1](https://github.com/stone2000ca/tay/pull/1) — `1f87cf1e` |
 | v0.2 | Supabase Marketplace integration + auto-migrations + UI shell with nav | NOT_STARTED | — | — |
 | v0.3 | Voice calibration — paste 5 emails, extract rubric, save to DB | NOT_STARTED | — | — |
 | v0.4 | Drafter v1 — type a prospect's name + company → generated draft | NOT_STARTED | — | — |

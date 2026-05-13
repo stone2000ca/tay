@@ -4,7 +4,7 @@ Per-run process + product scores from the judge agent. Trend table for spotting 
 
 | Run # | Date | Milestone | Status | Process | Product | Notable |
 |---|---|---|---|---|---|---|
-| (not yet) | — | — | — | — | — | Bootstrap state; first run pending |
+| 001 | 2026-05-13 | v0.1 setup wizard step 1 | MERGED | 4/5 | 4/5 | Agent didn't commit before declaring done; missing tests on SDK error-mapping seam; cookie `secure: true` will infinite-loop localhost dev |
 
 ---
 
