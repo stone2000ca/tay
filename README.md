@@ -27,6 +27,8 @@ Cold-outbound AI tools that run on someone else's servers see every prospect you
 
 This is the initial public scaffold. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
+v0.1 — setup wizard step 1 lives at `/setup`. First run redirects there until the wizard is completed.
+
 ## Env vars
 
 | Var | What it's for | Required |
