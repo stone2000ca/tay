@@ -8,3 +8,7 @@ Thumbs.db
 next-env.d.ts
 *.tsbuildinfo
 
+# /tay-build orchestrator transient state
+builds/.run-lock.json
+builds/checkpoints/run-*-IN_PROGRESS.md
+
