@@ -91,6 +91,24 @@ CREATE TABLE IF NOT EXISTS drafts (
 CREATE INDEX IF NOT EXISTS drafts_prospect_id_created_at_idx
   ON drafts (prospect_id, created_at DESC);
 `,
+  "0004_judge_decisions.sql": `
+CREATE TABLE IF NOT EXISTS judge_decisions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+  decision text NOT NULL CHECK (decision IN ('allow','block','revise','escalate')),
+  reasons jsonb NOT NULL,
+  rewrite jsonb,
+  model_used text NOT NULL,
+  rubric_snapshot jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS judge_decisions_draft_id_idx
+  ON judge_decisions (draft_id);
+
+CREATE INDEX IF NOT EXISTS judge_decisions_decision_created_at_idx
+  ON judge_decisions (decision, created_at DESC);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -220,6 +238,8 @@ function sentinelFor(file: string): Sentinel {
       // where a prior partial-failure left drafts created but the ALTER
       // unrolled.
       return { kind: "column", table: "prospects", column: "notes" };
+    case "0004_judge_decisions.sql":
+      return { kind: "table", table: "judge_decisions" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

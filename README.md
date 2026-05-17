@@ -23,11 +23,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.4 — drafter v1 (OpenRouter + voice rubric)
+## Status: v0.5 — judge v1 (4-way decision over drafts)
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.4 ships the first drafter — type a prospect&rsquo;s name + company at `/draft` and Tay generates an email using your calibrated voice rubric (via OpenRouter `MODELS.quality`). Drafts persist to Supabase with the rubric snapshot + prompt inputs so v0.5 can re-judge them. Every body gets the AI-disclosure footer appended (Tay gate C). NO send, NO judge gate, NO audit log yet — those are v0.5/v0.6.
+v0.5 wires the judge into the drafter flow. Every draft now passes through a strict reviewer LLM before display — it returns one of four decisions (`allow` / `block` / `revise` / `escalate`) and the UI renders it alongside the draft. The judge verifies Tay gates B (no special-category data), C (AI disclosure footer), D (voice rubric adherence), and H (adversarial-input defenses) as VERIFICATION rather than trusting the drafter. Decisions persist to a new `judge_decisions` table and emit a Tier-3 audit event (real hash chain lands in v0.6). NO send yet — that's v0.7.
 
 ## Env vars
 
