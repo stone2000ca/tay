@@ -246,6 +246,39 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #008 — (not yet started)
+## Run #008 — 2026-05-17 (~23 min)
 
-Next invocation picks up v0.8 — Suppression list + unsubscribe handling. Real `isSuppressed()` against a `suppression` table; unsubscribe webhook endpoint; bounce/complaint handling; address v0.7 carry-forwards.
+**Milestone:** v0.8 — Suppression list + unsubscribe handling + v0.7 carry-forwards
+**PR:** [#15](https://github.com/stone2000ca/tay/pull/15) — squashed as `85f591a9`
+**Judge:** Process 5/5, Product 4/5 — APPROVED
+
+### What landed
+- Migration 0008: suppression table + idempotent ALTER for sent_messages_draft_id_unique
+- `lib/suppression/{check,add}.ts` — real impl; safe-default TRUE on uncertainty
+- `lib/unsubscribe/token.ts` — HMAC-SHA256 + timingSafeEqual + kind-claim + 90-day exp
+- `lib/draft/disclosure.ts` extended — per-recipient unsubscribe link
+- `/u/[token]` page — collapses all bad states to one generic message; NO email echo
+- `/settings/suppression` — list/add/remove
+- All 4 v0.7 carry-forwards CLOSED
+- 267/267 tests
+
+### Notable
+- Tay gate E now LOAD-BEARING
+- Judge: "the unsubscribe page is a model of restraint"
+- Agent forgot to commit before COMPLETE — orchestrator follow-up via SendMessage (second occurrence; first was run #001)
+
+### v0.9 observations
+1. `/u/[token]` replay 5-second age heuristic — strictly honest under DB lag would need read-before-upsert
+2. bad-kind token-reject test missing (the check is implemented)
+3. disclosure.ts silently swallows token-generation throws
+4. `/u/[token]` uses dynamic import for listSuppressions
+5. `/settings/suppression` UI shows first entry only (audit log has full history)
+
+### Detailed checkpoint
+`builds/checkpoints/run-008-2026-05-17.md`
+
+---
+
+## Run #009 — (not yet started)
+
+Next invocation picks up v0.9 — Reply handler (inbound webhook + threaded LLM). Listens for Gmail replies via push notification or polling; LLM classifies (positive/negative/oof/needs-human); records trust events; if positive intent + autonomous tier, drafts a follow-up via the same drafter+judge stack.
