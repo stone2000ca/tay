@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { getAppConfig } from "@/lib/app-config";
+import { ensureSchema } from "@/lib/supabase/migrate";
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -15,6 +16,14 @@ function relativeTime(iso: string): string {
 }
 
 export default async function HomePage() {
+  // Fire schema bootstrap on first server-rendered request. Idempotent and
+  // never-throws — if Supabase isn't linked yet it silently skips, and any
+  // DB failure logs to console.warn rather than failing the page render.
+  const migrate = await ensureSchema();
+  if (migrate.error) {
+    console.warn("[home] ensureSchema reported error:", migrate.error);
+  }
+
   const cfg = await getAppConfig();
   if (!cfg) {
     redirect("/setup");
@@ -28,7 +37,7 @@ export default async function HomePage() {
         <p className="mt-2 text-sm text-gray-500">
           Validated {relativeTime(cfg.validatedAt)}.
         </p>
-        <p className="mt-10 text-sm text-gray-400">v0.1 — setup wizard step 1</p>
+        <p className="mt-10 text-sm text-gray-400">v0.2 — supabase + UI shell</p>
       </div>
     </main>
   );

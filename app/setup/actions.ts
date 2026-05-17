@@ -2,6 +2,7 @@
 
 import { setAppConfig } from "@/lib/app-config";
 import { validateApiKey } from "@/lib/anthropic";
+import { ensureSchema } from "@/lib/supabase/migrate";
 
 const NAME_MAX = 60;
 // ASCII printable (0x20-0x7E) only — no control chars, no smart quotes that
@@ -16,6 +17,15 @@ export async function validateAndSaveSetup(input: {
   apiKey: string;
   name: string;
 }): Promise<SetupResult> {
+  // Cold-start guard: server actions POST to a fresh Vercel function instance
+  // may land here before any GET has triggered `ensureSchema()`. Without this,
+  // the Supabase `setAppConfig` write below (DELETE+INSERT on `app_config`)
+  // would fail with "relation does not exist" on the very first wizard submit.
+  // ensureSchema is idempotent and never throws by contract; if migration
+  // genuinely fails, the subsequent setAppConfig call will surface a clear
+  // error to the user.
+  await ensureSchema();
+
   const apiKey = (input.apiKey ?? "").trim();
   const name = (input.name ?? "").trim();
 

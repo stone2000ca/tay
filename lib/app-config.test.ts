@@ -1,11 +1,12 @@
 // Unit tests for lib/app-config.ts.
 //
 // We mock `next/headers` with a Map-backed cookie store so we can exercise
-// getAppConfig / setAppConfig / clearAppConfig without booting Next.js.
+// the cookie-backend paths without booting Next.js. The Supabase backend
+// is exercised separately by mocking the server-client factory.
 //
 // Run with:  npm test  (=> vitest run)
 
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 type CookieEntry = { name: string; value: string };
 
@@ -27,11 +28,64 @@ vi.mock("next/headers", () => ({
     }),
 }));
 
+// Supabase mock — a tiny in-memory row store with the chainable surface the
+// real client gives us for the methods app-config touches.
+type Row = { id: string; name: string; validated_at: string };
+const supaRows: Row[] = [];
+let hasSupa = false;
+
+vi.mock("@/lib/supabase/server", () => ({
+  hasSupabaseEnv: () => hasSupa,
+  getSupabaseServerClient: () => makeFakeClient(),
+}));
+
+function makeFakeClient() {
+  return {
+    from(table: string) {
+      if (table !== "app_config") throw new Error(`unexpected table: ${table}`);
+      return {
+        select() {
+          return {
+            limit() {
+              return {
+                async maybeSingle() {
+                  const row = supaRows[0];
+                  return row
+                    ? { data: { name: row.name, validated_at: row.validated_at }, error: null }
+                    : { data: null, error: null };
+                },
+              };
+            },
+          };
+        },
+        insert(payload: { name: string; validated_at: string }) {
+          supaRows.push({ id: `id-${supaRows.length + 1}`, ...payload });
+          return Promise.resolve({ error: null });
+        },
+        delete() {
+          return {
+            not() {
+              supaRows.length = 0;
+              return Promise.resolve({ error: null });
+            },
+          };
+        },
+      };
+    },
+  };
+}
+
 afterEach(() => {
   cookieStore.clear();
+  supaRows.length = 0;
+  hasSupa = false;
 });
 
-describe("app-config", () => {
+describe("app-config (cookie backend)", () => {
+  beforeEach(() => {
+    hasSupa = false;
+  });
+
   test("setAppConfig + getAppConfig round-trips", async () => {
     const { setAppConfig, getAppConfig } = await import("./app-config");
 
@@ -79,6 +133,49 @@ describe("app-config", () => {
     expect(await getAppConfig()).not.toBeNull();
 
     await clearAppConfig();
+    expect(await getAppConfig()).toBeNull();
+  });
+});
+
+describe("app-config (supabase backend)", () => {
+  beforeEach(() => {
+    hasSupa = true;
+  });
+
+  test("setAppConfig + getAppConfig round-trips via supabase", async () => {
+    const { setAppConfig, getAppConfig } = await import("./app-config");
+
+    await setAppConfig({ name: "Tay Supa", validatedAt: "2026-01-01T00:00:00.000Z" });
+    expect(supaRows).toHaveLength(1);
+
+    const got = await getAppConfig();
+    expect(got).toEqual({ name: "Tay Supa", validatedAt: "2026-01-01T00:00:00.000Z" });
+  });
+
+  test("setAppConfig replaces existing row (single-row invariant)", async () => {
+    const { setAppConfig, getAppConfig } = await import("./app-config");
+
+    await setAppConfig({ name: "First", validatedAt: "2026-01-01T00:00:00.000Z" });
+    await setAppConfig({ name: "Second", validatedAt: "2026-02-01T00:00:00.000Z" });
+
+    expect(supaRows).toHaveLength(1);
+    const got = await getAppConfig();
+    expect(got?.name).toBe("Second");
+  });
+
+  test("getAppConfig returns null when no row exists", async () => {
+    const { getAppConfig } = await import("./app-config");
+    expect(await getAppConfig()).toBeNull();
+  });
+
+  test("clearAppConfig deletes the row", async () => {
+    const { setAppConfig, clearAppConfig, getAppConfig } = await import("./app-config");
+
+    await setAppConfig({ name: "Bye", validatedAt: "2026-01-01T00:00:00.000Z" });
+    expect(supaRows).toHaveLength(1);
+
+    await clearAppConfig();
+    expect(supaRows).toHaveLength(0);
     expect(await getAppConfig()).toBeNull();
   });
 });

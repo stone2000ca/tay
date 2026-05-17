@@ -14,7 +14,7 @@ Tay finds prospects, writes them in your voice, and books meetings — running o
 ## Install in 3 steps
 
 1. **Click the Deploy button above.** Vercel forks this repo into your account and prompts you for env vars.
-2. **Connect Supabase** via the Vercel Marketplace once your project is created. Tay runs migrations on first boot.
+2. **Connect Supabase** via the Vercel Marketplace once your project is created. Tay runs migrations on first boot — the first page load after the integration finishes creates the `app_config`, `prospects`, and `audit_log` tables idempotently.
 3. **Open your Tay URL** (Vercel shows it after deploy). The setup wizard walks you through Gmail connect, voice calibration, and your first ICP.
 
 No CLI. No Docker. No `npm install` on your machine.
@@ -23,11 +23,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.0.1 — scaffold
+## Status: v0.2 — Supabase wired + UI shell + auto-migrations
 
-This is the initial public scaffold. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
+This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.1 — setup wizard step 1 lives at `/setup`. First run redirects there until the wizard is completed.
+v0.2 wires Supabase (the marketplace integration auto-provisions env vars), auto-runs the schema migration on first server boot, ships the top-nav UI shell (Dashboard / Setup / Settings), and swaps `lib/app-config.ts` to a Supabase-backed store with a cookie fallback for local dev. The setup wizard lives at `/setup`; first run redirects there.
 
 ## Env vars
 
