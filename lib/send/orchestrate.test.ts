@@ -385,6 +385,33 @@ describe("sendDraft — precondition failures", () => {
     expect(sendEmailMock).not.toHaveBeenCalled();
   });
 
+  test("sent_messages UNIQUE violation (concurrent insert) → friendly already-sent error", async () => {
+    happyPathSetup();
+    // Replace the sent_messages insert (4th queued for the SENT_TABLE)
+    // with a UNIQUE-violation error. happyPathSetup enqueued: read
+    // (not-sent), then insert (success); we need to override the insert.
+    const sentQueue = tableQueues["sent_messages"] ?? [];
+    // sentQueue[0] is the already-sent read; sentQueue[1] is the insert.
+    const insertQ = sentQueue[1] as FakeQuery | undefined;
+    expect(insertQ).toBeDefined();
+    insertQ!.result = {
+      data: null,
+      error: {
+        code: "23505",
+        message:
+          'duplicate key value violates unique constraint "sent_messages_draft_id_unique"',
+      } as unknown as { message: string },
+    };
+    const { sendDraft } = await import("./orchestrate");
+    const out = await sendDraft("d1");
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.error).toMatch(/already been sent/);
+    // Gmail WAS called (the race got past the read-check) but no audit
+    // (the winner of the race writes the audit).
+    expect(sendEmailMock).toHaveBeenCalledOnce();
+    expect(appendAuditMock).not.toHaveBeenCalled();
+  });
+
   test("Gmail 401 → returns gmail error, no audit, no trust 'sent'", async () => {
     happyPathSetup();
     sendEmailMock.mockResolvedValue({

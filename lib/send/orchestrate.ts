@@ -208,6 +208,14 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
   }
 
   // -- Persist sent_message --------------------------------------------
+  //
+  // Same row already-attempted-by-a-concurrent-caller? The v0.8 UNIQUE
+  // constraint on sent_messages.draft_id (migration 0008) will reject
+  // the insert with a duplicate-key error. The read-then-write check
+  // above (already-sent guard) covers the SEQUENTIAL case nicely; this
+  // catches the CONCURRENT case where two callers both got past the
+  // read. Gmail was called (we can't undo it), but at least we surface
+  // a clear error and don't double-record.
 
   const insSent = await supabase.from(SENT_TABLE).insert({
     draft_id: draftId,
@@ -219,6 +227,18 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
     recipient_email: recipient,
   });
   if (insSent.error) {
+    if (isUniqueViolation(insSent.error)) {
+      console.warn(
+        "[send] sent_messages UNIQUE violation — concurrent send detected for draft",
+        draftId,
+      );
+      // Friendly error matching the sequential-case message so the UI
+      // behaves identically. Don't audit (the winner of the race will).
+      return {
+        ok: false,
+        error: "This draft has already been sent.",
+      };
+    }
     // Gmail did send. Don't unwind. Record audit anyway with a flag so
     // the user can see "send happened but local record failed".
     console.warn(
@@ -256,4 +276,23 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
     gmailThreadId: sent.gmailThreadId,
     recipient,
   };
+}
+
+/**
+ * Detect a Postgres unique-constraint violation on the sent_messages
+ * UNIQUE index added in migration 0008. Supabase surfaces the pg error
+ * code (23505) as `error.code` and the constraint name in `message`.
+ * We sniff both so the detection survives small Supabase JS upgrades.
+ */
+function isUniqueViolation(error: {
+  code?: string;
+  message?: string;
+}): boolean {
+  if (error.code === "23505") return true;
+  const msg = (error.message ?? "").toLowerCase();
+  return (
+    msg.includes("duplicate key") ||
+    msg.includes("sent_messages_draft_id_unique") ||
+    msg.includes("unique constraint")
+  );
 }

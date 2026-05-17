@@ -17,13 +17,22 @@
 //     catches and translates to a friendly error.
 //
 // Single-row pattern: Tay is single-tenant; there is at most one
-// google_oauth row per install. `saveGoogleOAuth` deletes any existing
-// row then inserts the new one. This is two operations rather than a
-// proper upsert because Supabase JS upsert needs a conflict key and we
-// have no natural one — `email_address` would be wrong (re-connecting
-// the same account to update tokens would unique-collide; re-connecting
-// a different account would silently overwrite). Delete-then-insert
-// expresses intent: "replace whatever is there".
+// google_oauth row per install.
+//
+// v0.8 refactor: was previously delete-then-insert (two non-transactional
+// operations — if the deploy crashed between them, the user lost their
+// connection). Now uses an upsert keyed on a DETERMINISTIC ROW ID
+// (SINGLE_ROW_ID below). The single-row pattern is expressed in the ID,
+// not by deleting siblings:
+//   - INSERT path: upsert with the fixed id → row gets created with
+//     that id and the new token fields.
+//   - UPDATE path: upsert with the fixed id → conflict on `id`, fields
+//     get overwritten in a single statement (atomic — no half-state).
+//
+// Re-connecting a different Gmail account just rewrites the row's
+// `email_address` field. This is intentional: a single-tenant install
+// has ONE sender at a time. If the user wants both accounts, they
+// install Tay twice.
 
 import {
   getSupabaseServerClient,
@@ -33,6 +42,13 @@ import { decryptToken, encryptToken, hasOAuthSecret } from "./crypto";
 import { refreshAccessToken } from "./google";
 
 const TABLE = "google_oauth";
+
+/**
+ * Deterministic single-row id. The google_oauth table has a uuid PK; we
+ * just always use this one value so upserts converge to a single row.
+ * Any value-shaped-as-a-uuid works; the actual bytes are arbitrary.
+ */
+const SINGLE_ROW_ID = "00000000-0000-0000-0000-000000000001";
 
 /** Refresh access tokens this many seconds BEFORE their actual expiry. */
 const REFRESH_BUFFER_SECONDS = 60;
@@ -76,23 +92,22 @@ export async function saveGoogleOAuth(args: {
     Date.now() + args.expiresIn * 1000,
   ).toISOString();
 
-  // Single-row pattern: clear then insert. Two round-trips; acceptable
-  // for an OAuth callback (rare event, not in a hot path).
-  const del = await supabase.from(TABLE).delete().neq("id", "");
-  if (del.error) {
-    throw new Error(
-      `[oauth persist] clear before insert failed: ${del.error.message}`,
-    );
-  }
-  const ins = await supabase.from(TABLE).insert({
-    email_address: args.emailAddress,
-    refresh_token_encrypted,
-    access_token_encrypted,
-    access_token_expires_at,
-    scopes: args.scope,
-  });
-  if (ins.error) {
-    throw new Error(`[oauth persist] insert failed: ${ins.error.message}`);
+  // v0.8: single-statement upsert on the deterministic SINGLE_ROW_ID.
+  // Atomic — no half-state between "old creds gone" and "new creds in".
+  const ups = await supabase.from(TABLE).upsert(
+    {
+      id: SINGLE_ROW_ID,
+      email_address: args.emailAddress,
+      refresh_token_encrypted,
+      access_token_encrypted,
+      access_token_expires_at,
+      scopes: args.scope,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "id" },
+  );
+  if (ups.error) {
+    throw new Error(`[oauth persist] upsert failed: ${ups.error.message}`);
   }
 }
 
@@ -164,6 +179,10 @@ export async function deleteGoogleOAuth(): Promise<void> {
     throw new Error("Supabase not configured.");
   }
   const supabase = getSupabaseServerClient();
+  // v0.8: target the deterministic SINGLE_ROW_ID instead of the
+  // .neq("id","") trick (which depended on every row having an id).
+  // Belt-and-braces: also delete any rows lingering from the old
+  // delete-then-insert era (uses the same .neq trick for breadth).
   const del = await supabase.from(TABLE).delete().neq("id", "");
   if (del.error) {
     throw new Error(`[oauth persist] delete failed: ${del.error.message}`);
