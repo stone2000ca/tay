@@ -1,29 +1,31 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #007)
-**Current milestone:** v0.8 (next to ship)
-**Roadmap progress:** 8/10 milestones merged
+**Last updated:** 2026-05-17 (Run #008)
+**Current milestone:** v0.9 (next to ship)
+**Roadmap progress:** 9/10 milestones merged
 
 ## Currently in flight
 
-(None — run #007 closed cleanly.)
+(None — run #008 closed cleanly.)
 
 ## Next up
 
-- **v0.8: Suppression list + unsubscribe handling.**
-  - New `suppression` table (email, reason, added_at, source). Reason enum: `user_unsubscribe`, `bounce`, `complaint`, `manual_add`.
-  - Real `lib/suppression/check.ts:isSuppressed(email)` — case-insensitive lookup; soft-fails to TRUE on read error (per v0.7 stub header note — safer to under-send than over-send).
-  - `lib/suppression/add.ts:addSuppression({ email, reason, source }): Promise<void>` — write contract; idempotent (upsert by lowercased email).
-  - Unsubscribe URL in the disclosure footer: `withDisclosure()` updates to inject a per-recipient unsubscribe link (`${NEXT_PUBLIC_SITE_URL}/u/<token>` where token is a signed `recipient_email:expires` HMAC).
-  - `app/u/[token]/page.tsx` — verifies token, shows "You are unsubscribed" confirmation, calls `addSuppression({ reason: "user_unsubscribe" })`.
-  - Suppression management UI: `/settings/suppression` — list current entries + manual-add form + remove button.
-  - Address v0.7 carry-forwards:
-    1. Add `ALTER TABLE sent_messages ADD CONSTRAINT sent_messages_draft_id_unique UNIQUE(draft_id)` migration to backstop the orchestrator's read-then-write race
-    2. Fix `sendDraftAction` to redirect with `?error=...` on failure
-    3. Wrap `saveGoogleOAuth` DELETE+INSERT in a transaction
-    4. Add `subject` to audit redactor matcher list (or document why deliberately not)
-  - Tay gate E now FULLY LIVE (real list with safe-fail default).
-  - Out of scope: reply handling (v0.9); bounce/complaint webhook integration with Gmail or external ESP (v0.9 or later).
+- **v0.9: Reply handler — inbound webhook + threaded LLM.**
+  - Gmail read scope added to OAuth flow (Tay only had `gmail.send` in v0.7 — needs `gmail.readonly` or `gmail.modify` for reply ingestion). Existing v0.7 connected users must re-consent.
+  - Inbound channel: TWO options — Gmail Push (Pub/Sub) needs Google Cloud Pub/Sub setup; alternative is polling via Vercel Cron (every ~5 min). v0.9 ships polling (zero external infra) with header comment noting Push as v1.0 candidate.
+  - New `replies` table: `(id, thread_id FK gmail_thread, from_email, subject, body, received_at, classified_intent)`
+  - New `lib/reply/classify.ts` — LLM call (cheap model) classifying reply intent: `interested` / `not_interested` / `out_of_office` / `unsubscribe_request` / `other`. Structured output schema with hard validator. Tay gate H: reply body wrapped in `<untrusted_source>` — replies are FULLY attacker-controlled.
+  - `lib/reply/handle.ts` orchestrator:
+    1. Match reply to a `sent_messages` row by thread_id
+    2. Record trust event (`replied_positive` / `replied_negative` / etc.)
+    3. If `unsubscribe_request` → `addSuppression({ reason: "user_unsubscribe", source: "reply-detector" })` + audit
+    4. If `out_of_office` → no further action (don't auto-reply to OOOs)
+    5. If `interested` AND trust tier allows AND not suppressed → generate a reply draft via existing drafter+judge stack
+    6. If reply gen → save to `drafts` with `kind: "reply"` (extend drafts schema with `parent_message_id` nullable FK)
+  - `/replies` page (server component) — table of recent replies + classifications + trust outcomes
+  - Address v0.8 observations: read-before-upsert on `/u/[token]`; add bad-kind token-reject test; console.warn on disclosure token-generation throw; static import for listSuppressions
+  - **CAUTION:** auto-reply on interested replies BURNS through the trust-tier system — v0.9 ships with auto-reply DISABLED by default (UI toggle in /settings); user opts in. v1.0's JOURNEYS suite validates the auto-reply path before it can be tier-promoted.
+  - Out of scope: actual booking flow (out of build scope); JOURNEYS eval suite (v1.0).
   - Replace `lib/audit/append.ts` stub with the real implementation:
     - Read `prev_hash` from latest `audit_log` row (sha256 hex, 64 chars; `prev_hash = null` for first row)
     - Compute `this_hash = sha256(prev_hash + canonical_json(payload) + occurred_at_iso + action)`
@@ -77,7 +79,7 @@
 | v0.5 | Judge v1 — 4-way decision over drafts | MERGED | #005 (2026-05-17) | [#9](https://github.com/stone2000ca/tay/pull/9) — `d0aab4d1` |
 | v0.6 | Audit log v1 — every draft + decision logged with hash chain | MERGED | #006 (2026-05-17) | [#11](https://github.com/stone2000ca/tay/pull/11) — `39f5c93d` |
 | v0.7 | Gmail OAuth + send path | MERGED | #007 (2026-05-17) | [#13](https://github.com/stone2000ca/tay/pull/13) — `d839b071` |
-| v0.8 | Suppression list + unsubscribe handling | NOT_STARTED | — | — |
+| v0.8 | Suppression list + unsubscribe handling | MERGED | #008 (2026-05-17) | [#15](https://github.com/stone2000ca/tay/pull/15) — `85f591a9` |
 | v0.9 | Reply handler — inbound webhook + threaded LLM | NOT_STARTED | — | — |
 | v1.0 | JOURNEYS eval suite green; trust-tier promotion live | NOT_STARTED | — | — |
 
