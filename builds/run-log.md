@@ -313,6 +313,55 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #010 — (not yet started)
+## Run #010 — 2026-05-17 (~51 min, includes fix-pass) — **v1.0 SHIP GATE**
 
-Next invocation picks up v1.0 — the SHIP GATE. JOURNEYS eval suite + trust-tier promotion live. Rolls up v0.9 polling robustness fixes. After v1.0 merges + JOURNEYS suite is green + trust-tier promotion verified, /tay-build surfaces "v1.0 complete. Awaiting user kickoff for post-1.0 work." and waits.
+**Milestone:** v1.0 — JOURNEYS eval suite + trust-tier promotion + v0.9 polling fixes
+**PR:** [#19](https://github.com/stone2000ca/tay/pull/19) — squashed as `cc2d374a`
+**Judge:** first pass NEEDS-FIXES → fix-pass → APPROVED. Final Process 5/5, Product 4/5.
+
+### What landed
+- JOURNEYS suite — 10 scenarios covering all 7 Tay gates; runs via `npm run test:journeys`; banner "JOURNEYS GREEN"
+- Trust-tier promotion: `lib/trust/tier.ts` with tier_0→tier_1→tier_2 auto-ladder; demotion on 5+ incidents/30d; `/settings/trust` page
+- Migration 0010: `trust_tiers` table + `gmail_poll_cursor.lock_col UNIQUE` single-row constraint
+- All 6 v0.9 polling carry-forwards closed
+- AuditAction extended: `trust.tier_changed`, `trust.manual_override_set`
+- 370 unit + 10 journey tests green
+
+### Notable
+- **First NEEDS-FIXES round in v0.x.** Two JOURNEYS scenarios (audit-chain-integrity + send-to-suppressed-prospect) were mock-trusting tautologies. Fix-pass rewrote both to call the REAL production code (`verifyAuditChain`, `sendDraft`). Re-judge APPROVED.
+- **Tay v0.x BUILD CYCLE COMPLETE.** 11/11 milestones MERGED across 10 runs over 1 day. Next `/tay-build` invocation will surface "v1.0 complete. Awaiting user kickoff for post-1.0 work." and wait for explicit user direction.
+
+### Detailed checkpoint
+`builds/checkpoints/run-010-2026-05-17.md`
+
+---
+
+## Build cycle summary
+
+| Metric | Total |
+|---|---|
+| Milestones merged | 11/11 (v0.0.1 + v0.1–v0.9 + v1.0) |
+| Runs | 10 (one milestone per run except #003 which folded LLM-pivot+v0.3) |
+| Unit tests | 370 across 32 files |
+| Journey tests | 10 (regression contract for v1.x+) |
+| Average judge process score | 4.8/5 |
+| Average judge product score | 4.1/5 |
+| PRs shipped | 19 (10 feature PRs + 9 orchestrator checkpoint PRs) |
+| Total run time | ~3h 23min across 10 runs |
+| Strategic pivots | 1 (Anthropic SDK → OpenRouter, run #003) |
+| NEEDS-FIXES rounds | 1 (run #010 v1.0 — JOURNEYS scenario quality) |
+
+### Tay gate coverage at v1.0
+- **B** (no special-category data): schema + classifier prompt + judge enforcement; JOURNEYS regression
+- **C** (AI disclosure footer): `withDisclosure` + judge verification; JOURNEYS regression
+- **D** (voice rubric enforcement): rubric in drafter system prompt as binding constraint; JOURNEYS regression
+- **E** (suppression respect on send): `isSuppressed` safe-default TRUE; called BEFORE Gmail API; JOURNEYS regression via REAL `sendDraft`
+- **F** (audit log on Tier-3): sha256 hash chain over every Tier-3 action; `verifyAuditChain` endpoint; JOURNEYS regression via REAL verifier with tamper-detection
+- **H** (adversarial-input defenses): six stacked defenses across drafter/judge/classifier (untrusted_source wrap + system prompts + json_object + hard validators + neuter + quote-strip); JOURNEYS regression × 3
+- **I** (trust-tier writes): `recordTrustEvent` on every Tier-3 outcome; `recomputeTrustTier` with auto-promotion ladder; JOURNEYS regression
+
+---
+
+## Run #011 — (awaiting user direction)
+
+Per the v1.0 ship-gate semantics in `skills/tay-build/SKILL.md`: the next `/tay-build` invocation will surface the complete merged-milestone list + open TODOs + recommended next steps and WAIT for explicit user direction. Tay does not auto-start v1.x work.
