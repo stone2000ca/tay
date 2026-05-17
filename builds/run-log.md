@@ -72,6 +72,49 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #003 — (not yet started)
+## Run #003 — 2026-05-17 (~17 min)
 
-Next invocation of `/tay-build` (without args) will pick up v0.3 (Voice calibration — paste 5 emails, extract rubric, save to DB). v0.3 is the first LLM-touching milestone post-scaffold and will REQUIRE `ANTHROPIC_API_KEY` in env for the extractor smoke test. Address the three escalations above first or accept mocked-only verification for the LLM seam.
+**Milestones:** LLM provider pivot (Anthropic → OpenRouter) + v0.3 voice calibration
+**Status transition:** v0.3 NOT_STARTED → MERGED (also: foundational LLM-seam pivot)
+**PR:** [#5](https://github.com/stone2000ca/tay/pull/5) — squashed as `27840442`
+**Judge:** Process 5/5, Product 4/5 — APPROVED both milestones, no fix-pass needed.
+
+### What landed
+
+**LLM pivot:**
+- New `lib/llm.ts` — OpenAI SDK pointed at `https://openrouter.ai/api/v1`; `MODELS` constants (`cheap` = `anthropic/claude-3.5-haiku`, `quality` = `anthropic/claude-3.5-sonnet`) overridable via env
+- `validateLlmKey` discriminated union (no raw SDK text leaks; verified by test)
+- `lib/anthropic.ts` deleted; `@anthropic-ai/sdk` removed from package.json
+- Setup wizard: `sk-or-` prefix, OpenRouter copy, link to openrouter.ai/keys
+- `.env.example` + README updated
+
+**v0.3 voice calibration:**
+- Migration `0002_voice_calibration.sql` (single-row pattern, idempotent)
+- `lib/voice/rubric-schema.ts` — `VoiceRubric` type + `parseRubric` hard validator (gate B: zero special-category fields)
+- `lib/voice/calibrate.ts` — extractor with gate H defenses (`<untrusted_source>` wrap + `response_format: json_object` + ignore-embedded-instructions system prompt)
+- `app/setup/voice/page.tsx` + `actions.ts` — 5 textareas, server action with cold-start `ensureSchema()` guard
+- `lib/supabase/migrate.ts` extended to handle multiple migrations
+- 29/29 tests passing (was 11)
+
+### Notable
+
+- User strategic pivot: Tay's LLM provider changed from Anthropic direct to OpenRouter (unified gateway). All future LLM-touching code uses `lib/llm.ts`.
+- Preflight gates (ANTHROPIC_API_KEY, Vercel-linking, live Supabase) explicitly waived by user. Live LLM and live DB verification deferred to first-user smoke test.
+- Two coupled milestones shipped in one PR. Acceptable because they're sequentially dependent (v0.3 needs the new LLM abstraction).
+- `gh pr merge --squash --delete-branch --repo stone2000ca/tay` works (passing `--repo` avoids the local-checkout abort that hit runs #001 and #002). New pattern locked in.
+
+### Escalations to user (open before next run)
+
+1. **First-user smoke test recommended** — paste real OpenRouter key, calibrate voice, confirm `voice_calibration` row exists. If `anthropic/claude-3.5-haiku` 404s on the user's account, swap `VALIDATION_MODEL` to `openai/gpt-4o-mini` (already documented as fallback in `lib/llm.ts`).
+2. **Paper cuts before v0.5 ship:**
+   - `/setup/voice` should surface "Supabase not configured" banner instead of wedging in a redirect loop
+   - Define `SAMPLE_COUNT` once and import in both UI and extractor
+
+### Detailed checkpoint
+`builds/checkpoints/run-003-2026-05-17.md`
+
+---
+
+## Run #004 — (not yet started)
+
+Next invocation will pick up v0.4 (Drafter v1 — type a prospect's name + company → generated draft). Reads the voice rubric saved in v0.3; uses `MODELS.quality`; ships an AI disclosure footer skeleton even though full footer-injection wires in v0.5/v0.7.
