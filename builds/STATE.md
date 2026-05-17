@@ -1,16 +1,23 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #005)
-**Current milestone:** v0.6 (next to ship)
-**Roadmap progress:** 6/10 milestones merged
+**Last updated:** 2026-05-17 (Run #006)
+**Current milestone:** v0.7 (next to ship)
+**Roadmap progress:** 7/10 milestones merged
 
 ## Currently in flight
 
-(None — run #005 closed cleanly.)
+(None — run #006 closed cleanly.)
 
 ## Next up
 
-- **v0.6: Audit log v1 — every draft + decision logged with hash chain.**
+- **v0.7: Gmail OAuth + send path — review queue → send → audit log.**
+  - Google OAuth 2.0 flow: `/api/auth/google/start` → consent → `/api/auth/google/callback` → store refresh token in `google_oauth` table (single-row per install; service-role key encrypts at rest if Supabase Vault available, else stored encrypted at app-level with a `TAY_OAUTH_SECRET` env var — agent's call). Scope: `https://www.googleapis.com/auth/gmail.send` only (no read; v0.9 adds read for replies).
+  - New `/queue` page (NEW): lists drafts where judge decision = `allow` (or `revise` accepted by user) and not yet sent. Each row: prospect + subject + body preview + "Send" button. On click: server action → `lib/send/gmail.ts` → POST to Gmail API → record `sent_messages` row → `appendAudit({ action: "send.sent", payload: {...} })` → `recordTrustEvent("send", "sent", {...})` (Tay gate I — first appearance).
+  - **Suppression check stub:** `lib/suppression/check.ts` — exports `isSuppressed(email): Promise<boolean>` that always returns `false` for v0.7. v0.8 implements the real list. EVERY send path MUST call this BEFORE Gmail API (Tay gate E).
+  - **Trust-tier infrastructure:** new `lib/trust/record.ts` with `recordTrustEvent(capability, eventType, metadata)`. v0.7 implementation: writes to a new `trust_events` table. v1.0 wires the tier-promotion logic.
+  - Tay gates ALL active for first time. Defense layers stack.
+  - Out of scope: actual auto-send queue (v1.0); reply handling (v0.9); the user manually clicks "Send" per draft in v0.7.
+  - v0.7 carry-forwards from v0.6 judge: hash domain separator polish (optional); AuditVerifyResult shape cleanup (optional).
   - Replace `lib/audit/append.ts` stub with the real implementation:
     - Read `prev_hash` from latest `audit_log` row (sha256 hex, 64 chars; `prev_hash = null` for first row)
     - Compute `this_hash = sha256(prev_hash + canonical_json(payload) + occurred_at_iso + action)`
@@ -32,12 +39,10 @@
 - **First-user smoke test recommended** — paste real `OPENROUTER_API_KEY`, calibrate voice, draft a sample email. If `anthropic/claude-3.5-haiku` 404s on the user's OpenRouter account, swap `VALIDATION_MODEL` to `openai/gpt-4o-mini`.
 - **Live Supabase not yet provisioned** — three migrations (0001, 0002, 0003 coming in v0.4) all unverified against real Postgres. Mitigations: idempotent CREATE IF NOT EXISTS, transactional DDL, inline-SQL fallback.
 - **Vercel project not linked to GitHub repo** — preview URLs not captured on PRs.
-- **Paper cuts to address in v0.6:**
-  - `appendAudit` redactor doc-vs-impl drift (v0.5 judge): comment claims it redacts `email`/`body`/`raw`, but matcher only catches `api_key`/`secret`/`token`/`password`. Either tighten the matcher or tighten the comment; add a test per protected key. Becomes load-bearing in v0.7 when send-event callers come online.
-  - `neuter()` belt-and-braces on the `<untrusted_source` opener (v0.5 judge)
-  - `sanitizeReasons` cap-vs-reject — document the design choice at the call site (v0.5 judge)
-- **Carried (best fixed in a later run with the right context):**
-  - Synthesized-email edge cases — punt to when a real email field lands
+- **Carried polish targets (non-blocking):**
+  - Hash domain separator (v0.6 judge): currently safe-by-coincidence via canonical-JSON `{...}` framing + fixed-width ISO timestamps + enum-constrained action. v0.7 polish: insert `\x1f` separators between hash fields so it's safe-by-construction.
+  - `AuditVerifyResult` shape (v0.6 judge): `supabase_unavailable` / `read_error` are lumped under `brokenAt` with zero sentinels rather than a top-level discriminated variant. UI handles correctly; cosmetic.
+  - Synthesized-email edge cases (v0.4 judge): RFC 1035 hyphen-terminated label + unicode collision. Fix when a real email field lands (likely v0.7 if Gmail send requires real recipient address — which it does).
 
 ## Recent learnings
 
@@ -64,7 +69,7 @@
 | v0.3 | Voice calibration — paste 5 emails, extract rubric, save to DB | MERGED | #003 (2026-05-17) | [#5](https://github.com/stone2000ca/tay/pull/5) — `27840442` |
 | v0.4 | Drafter v1 — type a prospect's name + company → generated draft | MERGED | #004 (2026-05-17) | [#7](https://github.com/stone2000ca/tay/pull/7) — `d445d7c0` |
 | v0.5 | Judge v1 — 4-way decision over drafts | MERGED | #005 (2026-05-17) | [#9](https://github.com/stone2000ca/tay/pull/9) — `d0aab4d1` |
-| v0.6 | Audit log v1 — every draft + decision logged with hash chain | NOT_STARTED | — | — |
+| v0.6 | Audit log v1 — every draft + decision logged with hash chain | MERGED | #006 (2026-05-17) | [#11](https://github.com/stone2000ca/tay/pull/11) — `39f5c93d` |
 | v0.7 | Gmail OAuth + send path | NOT_STARTED | — | — |
 | v0.8 | Suppression list + unsubscribe handling | NOT_STARTED | — | — |
 | v0.9 | Reply handler — inbound webhook + threaded LLM | NOT_STARTED | — | — |
