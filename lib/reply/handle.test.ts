@@ -250,8 +250,20 @@ describe("handleReply — branches", () => {
     expect(generateReplyDraftMock).not.toHaveBeenCalled();
   });
 
-  test("interested + auto-reply ON + not suppressed → drafts reply", async () => {
+  test("interested + auto-reply ON + not suppressed → drafts reply (hydrates prospect)", async () => {
     setupMatchedFlow("interested");
+    // The hydrateProspect query (FROM prospects) comes after the update
+    // and before generateReplyDraft. Pre-load a fresh query slot.
+    const prospectQ = freshQuery();
+    prospectQ.result = {
+      data: {
+        full_name: "Alice Real",
+        company: "Acme Co",
+        notes: "Founder of Acme",
+        email: "alice@example.com",
+      },
+      error: null,
+    };
     getReplySettingsMock.mockResolvedValue({ autoReplyEnabled: true });
     isSuppressedMock.mockResolvedValue(false);
     generateReplyDraftMock.mockResolvedValue({
@@ -265,9 +277,30 @@ describe("handleReply — branches", () => {
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.replyDrafted).toBe(true);
     expect(generateReplyDraftMock).toHaveBeenCalled();
+    // v1.0 carry-forward: prompt_inputs comes from the hydrated prospect,
+    // not empty strings.
+    const draftCall = generateReplyDraftMock.mock.calls[0]?.[0] as {
+      promptInputs: Record<string, unknown>;
+    };
+    expect(draftCall?.promptInputs).toMatchObject({
+      full_name: "Alice Real",
+      company: "Acme Co",
+    });
     expect(appendAuditMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "reply.draft_generated" }),
     );
+  });
+
+  test("no thread match → reply row persists with <unmatched-thread> sentinel body (LOW carry-forward)", async () => {
+    const sentQ = freshQuery();
+    sentQ.result = { data: null, error: null };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    const { handleReply } = await import("./handle");
+    await handleReply(baseArgs);
+    expect(insQ.capturedInsert).toMatchObject({
+      body: "<unmatched-thread>",
+    });
   });
 
   test("interested + auto-reply ON + suppressed → no draft (Tay gate E defense)", async () => {

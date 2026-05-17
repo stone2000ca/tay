@@ -212,6 +212,29 @@ CREATE TABLE IF NOT EXISTS reply_settings (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 `,
+  "0010_trust_tiers_and_polling_fixes.sql": `
+-- v1.0: trust-tier promotion state + Gmail poll cursor single-row constraint.
+CREATE TABLE IF NOT EXISTS trust_tiers (
+  capability text PRIMARY KEY CHECK (capability IN ('send','reply_send','book')),
+  tier text NOT NULL CHECK (tier IN ('tier_0','tier_1','tier_2','tier_3')) DEFAULT 'tier_0',
+  promoted_at timestamptz,
+  manual_override boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'gmail_poll_cursor_single_row'
+  ) THEN
+    ALTER TABLE gmail_poll_cursor
+      ADD COLUMN IF NOT EXISTS lock_col integer NOT NULL DEFAULT 1;
+    ALTER TABLE gmail_poll_cursor
+      ADD CONSTRAINT gmail_poll_cursor_single_row UNIQUE (lock_col);
+  END IF;
+END$$;
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -360,6 +383,14 @@ function sentinelFor(file: string): Sentinel {
       // strictly-stronger signal: if it exists, this migration ran. The
       // ALTER is idempotent via ADD COLUMN IF NOT EXISTS.
       return { kind: "table", table: "replies" };
+    case "0010_trust_tiers_and_polling_fixes.sql":
+      // 0010 creates `trust_tiers` AND adds a UNIQUE constraint
+      // (`gmail_poll_cursor_single_row`) to gmail_poll_cursor. The
+      // trust_tiers table is the strictly-stronger signal: if it exists,
+      // this migration ran. The constraint-add is idempotent via the DO
+      // block, so re-running when the constraint exists but the table
+      // somehow doesn't would still be safe.
+      return { kind: "table", table: "trust_tiers" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

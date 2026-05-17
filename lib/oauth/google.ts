@@ -230,25 +230,38 @@ export async function getProfile(args: {
 export type GmailMessageRef = { id: string; threadId: string };
 
 /**
- * List recent messages OR (when `after` is set) the messages added since
- * a known historyId. Uses the History API in the after-cursor case so we
- * only fetch DELTAS — much cheaper and avoids re-processing already-seen
- * replies. Returns an empty array on an empty result, throws on HTTP error.
+ * v1.0 addition: detailed History API result that exposes the response's
+ * top-level `historyId`. Callers that need the post-poll cursor (e.g.
+ * lib/reply/poll.ts) prefer this over `getRecentMessages` — it eliminates
+ * the v0.9 cursor-advance race where a second getProfile() call could see
+ * a newer historyId than the messages we actually processed.
  *
- * `maxResults` caps the response page; for v0.9 we don't paginate. If the
- * cursor falls more than ~1000 messages behind we'd lose data — acceptable
- * tradeoff for v0.9 (the cron runs every 5 min), revisit in v1.0.
+ * For the no-cursor path (first poll seed), `historyId` is null since the
+ * /messages endpoint doesn't return it; the seed path falls back to
+ * getProfile().
  */
-export async function getRecentMessages(args: {
+export type GmailHistoryResult = {
+  refs: GmailMessageRef[];
+  /** Top-level historyId from the History API response. Null on the seed
+   *  path (when `after` is not provided). */
+  historyId: string | null;
+};
+
+/**
+ * v1.0 — same as `getRecentMessages` but exposes the History API's
+ * top-level `historyId`. Use this when you need to advance a poll cursor
+ * based on the response (NOT a follow-up getProfile() call — that races).
+ *
+ * Returns `historyId: null` on the no-cursor (seed) path.
+ */
+export async function getRecentMessagesWithHistoryId(args: {
   accessToken: string;
   after?: string;
   maxResults?: number;
-}): Promise<GmailMessageRef[]> {
+}): Promise<GmailHistoryResult> {
   const max = args.maxResults ?? 100;
   let url: string;
   if (args.after) {
-    // History API gives us the delta since the cursor. We only care about
-    // messageAdded events — that's the universe of "new replies".
     const params = new URLSearchParams({
       startHistoryId: args.after,
       historyTypes: "messageAdded",
@@ -269,9 +282,18 @@ export async function getRecentMessages(args: {
   }
   const json = (await res.json()) as Record<string, unknown>;
 
-  const out: GmailMessageRef[] = [];
+  const refs: GmailMessageRef[] = [];
   const seen = new Set<string>();
+  let historyId: string | null = null;
+
   if (args.after) {
+    const hidRaw = json.historyId;
+    historyId =
+      typeof hidRaw === "string"
+        ? hidRaw
+        : typeof hidRaw === "number"
+          ? String(hidRaw)
+          : null;
     const history = Array.isArray(json.history) ? json.history : [];
     for (const entry of history) {
       const added = (entry as Record<string, unknown>).messagesAdded;
@@ -284,7 +306,7 @@ export async function getRecentMessages(args: {
         const threadId = typeof mo.threadId === "string" ? mo.threadId : "";
         if (id && threadId && !seen.has(id)) {
           seen.add(id);
-          out.push({ id, threadId });
+          refs.push({ id, threadId });
         }
       }
     }
@@ -297,11 +319,33 @@ export async function getRecentMessages(args: {
       const threadId = typeof mo.threadId === "string" ? mo.threadId : "";
       if (id && threadId && !seen.has(id)) {
         seen.add(id);
-        out.push({ id, threadId });
+        refs.push({ id, threadId });
       }
     }
   }
-  return out;
+  return { refs, historyId };
+}
+
+/**
+ * List recent messages OR (when `after` is set) the messages added since
+ * a known historyId. Uses the History API in the after-cursor case so we
+ * only fetch DELTAS — much cheaper and avoids re-processing already-seen
+ * replies. Returns an empty array on an empty result, throws on HTTP error.
+ *
+ * `maxResults` caps the response page; for v0.9 we don't paginate. If the
+ * cursor falls more than ~1000 messages behind we'd lose data — acceptable
+ * tradeoff for v0.9 (the cron runs every 5 min), revisit in v1.0.
+ *
+ * v1.0: thin wrapper over getRecentMessagesWithHistoryId; preserved so
+ * existing callers stay source-compatible.
+ */
+export async function getRecentMessages(args: {
+  accessToken: string;
+  after?: string;
+  maxResults?: number;
+}): Promise<GmailMessageRef[]> {
+  const result = await getRecentMessagesWithHistoryId(args);
+  return result.refs;
 }
 
 export type GmailMessage = {

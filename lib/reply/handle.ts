@@ -49,6 +49,21 @@ import { generateReplyDraft } from "./draft";
 
 const REPLIES_TABLE = "replies";
 const SENT_TABLE = "sent_messages";
+const PROSPECTS_TABLE = "prospects";
+
+/**
+ * v1.0 carry-forward (LOW #1): when we receive a reply on a thread that
+ * we did NOT initiate, we record the reply row but DO NOT persist the
+ * full body — only this sentinel string. Rationale:
+ *   - The recipient never asked Tay to read their inbound mail to a
+ *     third-party thread; the matched-thread case is the explicit
+ *     consent boundary (they replied to OUR send).
+ *   - We still want a row for operational debugging / counts ("Gmail
+ *     handed us X unmatched messages this week").
+ *   - The sentinel keeps the column NOT-NULL constraint happy without
+ *     persisting potentially-private third-party content.
+ */
+export const UNMATCHED_BODY_SENTINEL = "<unmatched-thread>";
 
 export type HandleReplyResult =
   | { ok: true; intent: ReplyIntent | "skipped" | "duplicate"; replyDrafted: boolean }
@@ -100,6 +115,11 @@ export async function handleReply(args: {
       | null) ?? null;
 
   // -- 1 DEDUPE -----------------------------------------------------------
+  // v1.0 carry-forward: when the thread isn't ours, persist a sentinel
+  // body string rather than the recipient's full content (privacy +
+  // storage). The full body is only persisted when we have explicit
+  // consent context (matched send).
+  const persistedBody = matched ? args.body : UNMATCHED_BODY_SENTINEL;
   const ins = await supabase
     .from(REPLIES_TABLE)
     .insert({
@@ -108,7 +128,7 @@ export async function handleReply(args: {
       sent_message_id: matched?.id ?? null,
       from_email: args.fromEmail,
       subject: args.subject ?? null,
-      body: args.body,
+      body: persistedBody,
       received_at: args.receivedAt,
     })
     .select("id")
@@ -251,6 +271,10 @@ export async function handleReply(args: {
       // list between the original send and the reply.
       const suppressed = await isSuppressed(args.fromEmail);
       if (!suppressed) {
+        // v1.0 carry-forward (LOW #3): hydrate the prospect record so
+        // the reply drafter sees real full_name/company in its prompt.
+        // v0.9 passed empty strings which degraded the voice match.
+        const prospect = await hydrateProspect(supabase, matched.prospect_id);
         try {
           const drafted = await generateReplyDraft({
             reply: {
@@ -263,9 +287,10 @@ export async function handleReply(args: {
             replyId,
             prospectId: matched.prospect_id,
             promptInputs: {
-              full_name: "",
-              company: "",
-              notes: undefined,
+              full_name: prospect.full_name,
+              company: prospect.company,
+              notes: prospect.notes ?? undefined,
+              email: prospect.email,
             },
           });
           if (drafted.ok) {
@@ -310,6 +335,48 @@ export async function handleReply(args: {
   });
 
   return { ok: true, intent, replyDrafted };
+}
+
+/**
+ * Read a prospect row (full_name, company, notes, email) for the reply
+ * drafter's prompt_inputs payload. Soft-fails to empty strings — the
+ * drafter still produces a valid response with empty fields, just with
+ * a slightly less personalized opener.
+ */
+async function hydrateProspect(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  prospectId: string,
+): Promise<{
+  full_name: string;
+  company: string;
+  notes: string | null;
+  email: string;
+}> {
+  try {
+    const { data, error } = await supabase
+      .from(PROSPECTS_TABLE)
+      .select("full_name, company, notes, email")
+      .eq("id", prospectId)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) {
+      return { full_name: "", company: "", notes: null, email: "" };
+    }
+    const row = data as {
+      full_name: string | null;
+      company: string | null;
+      notes: string | null;
+      email: string | null;
+    };
+    return {
+      full_name: row.full_name ?? "",
+      company: row.company ?? "",
+      notes: row.notes,
+      email: row.email ?? "",
+    };
+  } catch {
+    return { full_name: "", company: "", notes: null, email: "" };
+  }
 }
 
 /**
