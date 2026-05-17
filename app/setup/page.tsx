@@ -36,11 +36,11 @@ export default function SetupPage() {
               {status.name} is ready
             </h1>
             <p className="mt-3 text-sm text-gray-600">
-              Your Anthropic API key checks out. One last manual step before Tay can
-              actually talk to Claude:
+              Your OpenRouter API key checks out. One last manual step before Tay can
+              actually talk to an LLM on your behalf:
             </p>
             <p className="mt-4 rounded-lg bg-gray-50 p-4 text-sm text-gray-700">
-              Add <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">ANTHROPIC_API_KEY</code>{" "}
+              Add <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">OPENROUTER_API_KEY</code>{" "}
               to your Vercel env vars (or <code className="rounded bg-gray-200 px-1 py-0.5 text-xs">.env.local</code>{" "}
               for local dev) using the same key you just validated. Restart the app
               to continue setup.
@@ -73,7 +73,7 @@ export default function SetupPage() {
         >
           <div>
             <label htmlFor="apiKey" className="block text-sm font-medium text-gray-900">
-              Anthropic API key
+              OpenRouter API key
             </label>
             <input
               id="apiKey"
@@ -81,7 +81,7 @@ export default function SetupPage() {
               type="password"
               autoComplete="off"
               required
-              placeholder="sk-ant-..."
+              placeholder="sk-or-..."
               className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
             />
           </div>
@@ -120,9 +120,17 @@ export default function SetupPage() {
         </form>
 
         <p className="mt-6 text-center text-xs text-gray-500">
-          What is this? Tay uses this key to call Claude on your behalf when it
-          drafts and judges emails. The key is stored in your hosting env, not in
-          Tay&rsquo;s database.
+          What is this? Tay uses{" "}
+          <a
+            href="https://openrouter.ai/keys"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline hover:text-gray-700"
+          >
+            OpenRouter
+          </a>{" "}
+          — one key, any model (Claude, GPT, Gemini, Llama, etc.). The key is
+          stored in your hosting env, not in Tay&rsquo;s database.
         </p>
       </div>
     </main>

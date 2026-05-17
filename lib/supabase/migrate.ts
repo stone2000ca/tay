@@ -1,22 +1,24 @@
 // Auto-migration runner for Tay.
 //
-// Strategy: on first server cold-start, check if `app_config` exists. If
-// not, apply `0001_init.sql` in a transaction. If yes, skip. If env vars
-// are missing (Supabase not linked yet — pre-wizard, local dev), skip
-// silently. Never throws — callers get a result tuple, and a page render
-// must never fail because we couldn't reach the DB.
+// Strategy: on first server cold-start, apply every migration in
+// `lib/supabase/migrations/*.sql` in lexicographic order. Each migration
+// is idempotent (CREATE … IF NOT EXISTS) so re-running is safe. We wrap
+// each migration in its own transaction. If env vars are missing
+// (Supabase not linked yet — pre-wizard, local dev), skip silently.
+// Never throws — callers get a result tuple, and a page render must never
+// fail because we couldn't reach the DB.
 //
 // Caching: module-scoped Promise so a hundred concurrent page loads on a
 // cold start dedupe to one DB round-trip. Per-server-instance — Vercel
-// will obviously cold-start more than one worker, but the pre-check
-// short-circuits all later workers cheaply.
+// will obviously cold-start more than one worker, but the per-migration
+// pre-check short-circuits later workers cheaply.
 //
-// Bundling: we ship the SQL inline as a string constant (INIT_SQL_INLINE)
-// AND attempt to read the on-disk copy. Inline wins if the disk read
-// fails — Turbopack's handling of `__dirname` for non-JS assets is
-// inconsistent, and we'd rather succeed than be elegant. The on-disk file
-// is the source of truth for humans; the inline string is the source of
-// truth for the runtime.
+// Bundling: we ship the SQL inline as a MIGRATIONS_INLINE map AND attempt
+// to read each on-disk copy. Inline wins if the disk read fails —
+// Turbopack's handling of `__dirname` for non-JS assets is inconsistent,
+// and we'd rather succeed than be elegant. The on-disk files are the
+// source of truth for humans; the inline map is the source of truth for
+// the runtime.
 
 import { Client } from "pg";
 import { promises as fs } from "node:fs";
@@ -26,12 +28,16 @@ export type MigrateResult = {
   ran: boolean;
   skipped: boolean;
   error?: string;
+  /** Names of migrations actually applied this call (lexicographic). */
+  applied?: string[];
 };
 
-// Keep in sync with lib/supabase/migrations/0001_init.sql. The on-disk file
-// is the human-readable source of truth; this inline copy is the runtime
-// fallback for bundlers that don't ship the .sql alongside the JS.
-const INIT_SQL_INLINE = `
+// Keep keys in sync with lib/supabase/migrations/*.sql filenames. The
+// on-disk files are the human-readable source of truth; these inline
+// strings are the runtime fallback for bundlers that don't ship .sql
+// alongside the JS.
+const MIGRATIONS_INLINE: Record<string, string> = {
+  "0001_init.sql": `
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 CREATE TABLE IF NOT EXISTS app_config (
@@ -57,7 +63,21 @@ CREATE TABLE IF NOT EXISTS audit_log (
   prev_hash text,
   this_hash text
 );
-`;
+`,
+  "0002_voice_calibration.sql": `
+CREATE TABLE IF NOT EXISTS voice_calibration (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  rubric jsonb NOT NULL,
+  sample_count integer NOT NULL,
+  model_used text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+`,
+};
+
+// Lexicographic order is the migration apply order. Filenames are
+// numerically prefixed (`0001_`, `0002_`, ...) so this matches intent.
+const MIGRATION_FILES = Object.keys(MIGRATIONS_INLINE).sort();
 
 let cached: Promise<MigrateResult> | null = null;
 
@@ -69,7 +89,7 @@ let cached: Promise<MigrateResult> | null = null;
  */
 export function ensureSchema(): Promise<MigrateResult> {
   if (cached) return cached;
-  cached = runMigrationOnce();
+  cached = runMigrationsOnce();
   return cached;
 }
 
@@ -78,7 +98,7 @@ export function __resetMigrateCacheForTests(): void {
   cached = null;
 }
 
-async function runMigrationOnce(): Promise<MigrateResult> {
+async function runMigrationsOnce(): Promise<MigrateResult> {
   const connectionString =
     process.env.POSTGRES_URL_NON_POOLING ?? process.env.POSTGRES_URL;
 
@@ -87,6 +107,7 @@ async function runMigrationOnce(): Promise<MigrateResult> {
   }
 
   let client: Client | null = null;
+  const applied: string[] = [];
   try {
     client = new Client({
       connectionString,
@@ -94,38 +115,49 @@ async function runMigrationOnce(): Promise<MigrateResult> {
     });
     await client.connect();
 
-    // Cheap pre-check: if `app_config` already exists, treat as migrated.
-    const exists = await client.query<{ exists: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM information_schema.tables
-         WHERE table_schema = 'public' AND table_name = 'app_config'
-       ) AS exists`,
-    );
-    if (exists.rows[0]?.exists) {
-      return { ran: false, skipped: true };
+    for (const file of MIGRATION_FILES) {
+      // Per-migration idempotence is on the SQL (CREATE IF NOT EXISTS),
+      // but we also pre-check a sentinel table per migration so we skip
+      // the entire SQL apply when it's already been run. Cheaper, and
+      // avoids any unforeseen side-effects of re-running DDL.
+      const sentinel = sentinelTableFor(file);
+      const existsRes = await client.query<{ exists: boolean }>(
+        `SELECT EXISTS (
+           SELECT 1 FROM information_schema.tables
+           WHERE table_schema = 'public' AND table_name = $1
+         ) AS exists`,
+        [sentinel],
+      );
+      if (existsRes.rows[0]?.exists) {
+        continue;
+      }
+
+      const sql = await loadMigrationSql(file);
+      await client.query("BEGIN");
+      try {
+        await client.query(sql);
+        await client.query("COMMIT");
+        applied.push(file);
+      } catch (inner) {
+        await client.query("ROLLBACK").catch(() => {
+          /* swallow; original error is more interesting */
+        });
+        throw inner;
+      }
     }
 
-    const sql = await loadInitSql();
-
-    await client.query("BEGIN");
-    try {
-      await client.query(sql);
-      await client.query("COMMIT");
-    } catch (inner) {
-      await client.query("ROLLBACK").catch(() => {
-        /* swallow; original error is more interesting */
-      });
-      throw inner;
-    }
-
-    return { ran: true, skipped: false };
+    return {
+      ran: applied.length > 0,
+      skipped: applied.length === 0,
+      applied,
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     // Never log raw connection string / service-role key. `message` from pg
     // can include the DSN on connection failure — strip anything that looks
     // like one.
     console.warn("[migrate] schema bootstrap failed:", redact(message));
-    return { ran: false, skipped: false, error: message };
+    return { ran: false, skipped: false, error: message, applied };
   } finally {
     if (client) {
       await client.end().catch(() => {
@@ -135,25 +167,47 @@ async function runMigrationOnce(): Promise<MigrateResult> {
   }
 }
 
-async function loadInitSql(): Promise<string> {
+/**
+ * Sentinel table for each migration. Picked as a table the migration
+ * *creates*, so its presence is sufficient evidence the migration ran.
+ * Keep in sync if migration contents change.
+ */
+function sentinelTableFor(file: string): string {
+  switch (file) {
+    case "0001_init.sql":
+      return "app_config";
+    case "0002_voice_calibration.sql":
+      return "voice_calibration";
+    default:
+      // Unknown file — return an impossible name so the pre-check fails
+      // closed and we re-run the SQL. Idempotent CREATEs make this safe.
+      return `__tay_unknown_${file}`;
+  }
+}
+
+async function loadMigrationSql(file: string): Promise<string> {
   // Try disk first; fall back to the inlined copy. Inline keeps us alive
   // when the bundler doesn't ship the .sql file (Turbopack quirks).
-  // The disk read is a "nice to have" — INIT_SQL_INLINE is the runtime
-  // source of truth. Turbopack will warn about NFT tracing process.cwd()
-  // here; the warning is benign because we don't actually depend on the
-  // file being bundled.
-  const candidates = [
-    path.join(process.cwd(), "lib", "supabase", "migrations", "0001_init.sql"),
-  ];
-  for (const candidate of candidates) {
-    try {
-      const text = await fs.readFile(candidate, "utf8");
-      if (text.trim().length > 0) return text;
-    } catch {
-      // ignore; try the next candidate
-    }
+  // The disk read is a "nice to have" — MIGRATIONS_INLINE is the runtime
+  // source of truth.
+  const candidate = path.join(
+    process.cwd(),
+    "lib",
+    "supabase",
+    "migrations",
+    file,
+  );
+  try {
+    const text = await fs.readFile(candidate, "utf8");
+    if (text.trim().length > 0) return text;
+  } catch {
+    // ignore; fall through to inline
   }
-  return INIT_SQL_INLINE;
+  const inline = MIGRATIONS_INLINE[file];
+  if (!inline) {
+    throw new Error(`[migrate] no inline SQL for migration: ${file}`);
+  }
+  return inline;
 }
 
 function redact(message: string): string {

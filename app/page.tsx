@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getAppConfig } from "@/lib/app-config";
 import { ensureSchema } from "@/lib/supabase/migrate";
+import { getRubric } from "@/lib/voice/calibrate";
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -29,6 +30,17 @@ export default async function HomePage() {
     redirect("/setup");
   }
 
+  // Voice calibration is wizard step 2. If the user has an app_config row
+  // but no voice_calibration row, push them to /setup/voice. getRubric is
+  // a soft-fail READ — null could mean "not calibrated" or "Supabase
+  // unavailable"; either way we'd rather show the calibration page than
+  // a half-configured dashboard. The page itself surfaces any real DB
+  // errors when the user submits.
+  const rubric = await getRubric();
+  if (!rubric) {
+    redirect("/setup/voice");
+  }
+
   return (
     <main className="min-h-dvh flex items-center justify-center px-6">
       <div className="max-w-xl text-center">
@@ -37,7 +49,9 @@ export default async function HomePage() {
         <p className="mt-2 text-sm text-gray-500">
           Validated {relativeTime(cfg.validatedAt)}.
         </p>
-        <p className="mt-10 text-sm text-gray-400">v0.2 — supabase + UI shell</p>
+        <p className="mt-10 text-sm text-gray-400">
+          v0.3 — OpenRouter LLM + voice calibration
+        </p>
       </div>
     </main>
   );

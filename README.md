@@ -2,11 +2,11 @@
 
 Tay finds prospects, writes them in your voice, and books meetings — running on your own Vercel + Supabase. No SaaS account. No shared data. No per-seat fees.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/stone2000ca/tay&env=ANTHROPIC_API_KEY,NEXT_PUBLIC_APP_NAME&envDescription=Your%20Anthropic%20API%20key%20and%20a%20display%20name%20for%20your%20Tay&envLink=https://github.com/stone2000ca/tay/blob/main/README.md%23env-vars)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/stone2000ca/tay&env=OPENROUTER_API_KEY,NEXT_PUBLIC_APP_NAME&envDescription=Your%20OpenRouter%20API%20key%20and%20a%20display%20name%20for%20your%20Tay&envLink=https://github.com/stone2000ca/tay/blob/main/README.md%23env-vars)
 
 ## What you'll need
 
-- An [Anthropic API key](https://console.anthropic.com/settings/keys) — Tay uses Claude to draft, judge, and research (~$20/month for moderate use)
+- An [OpenRouter API key](https://openrouter.ai/keys) — one key for any model (Claude, GPT, Gemini, Llama, etc.). Tay uses the model you pick to draft, judge, and research (~$20/month for moderate use on a mid-tier model)
 - A free [Vercel](https://vercel.com/signup) account — hosts your Tay instance
 - A free [Supabase](https://supabase.com/) account — stores your prospects, drafts, and audit log
 - 15 minutes for first-time setup
@@ -23,17 +23,19 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.2 — Supabase wired + UI shell + auto-migrations
+## Status: v0.3 — OpenRouter LLM + voice calibration
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.2 wires Supabase (the marketplace integration auto-provisions env vars), auto-runs the schema migration on first server boot, ships the top-nav UI shell (Dashboard / Setup / Settings), and swaps `lib/app-config.ts` to a Supabase-backed store with a cookie fallback for local dev. The setup wizard lives at `/setup`; first run redirects there.
+v0.3 pivots the LLM seam from the Anthropic SDK to [OpenRouter](https://openrouter.ai) (one key, any model) and ships voice calibration — paste 5 of your own sample outbound emails at `/setup/voice` and Tay extracts a stylistic rubric (opener style, sentence length, formality, signature, common/avoid phrases). The rubric is the contract the v0.4 drafter and v0.5 judge will enforce.
 
 ## Env vars
 
 | Var | What it's for | Required |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | Claude calls for drafting, judging, research | yes |
+| `OPENROUTER_API_KEY` | LLM calls for drafting, judging, research — any model OpenRouter supports | yes |
+| `OPENROUTER_MODEL_CHEAP` | Override the default cheap model (default `anthropic/claude-3.5-haiku`) | optional |
+| `OPENROUTER_MODEL_QUALITY` | Override the default quality model (default `anthropic/claude-3.5-sonnet`) | optional |
 | `NEXT_PUBLIC_APP_NAME` | Display name shown in the Tay UI | optional |
 | `NEXT_PUBLIC_SUPABASE_URL` | Auto-set by the Vercel + Supabase Marketplace integration | yes |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Auto-set by the integration | yes |
@@ -47,7 +49,7 @@ For local development, copy [.env.example](./.env.example) to `.env.local` and f
 git clone git@github.com:stone2000ca/tay.git
 cd tay
 npm install
-cp .env.example .env.local   # fill in ANTHROPIC_API_KEY at minimum
+cp .env.example .env.local   # fill in OPENROUTER_API_KEY at minimum
 npm run dev
 ```
 
