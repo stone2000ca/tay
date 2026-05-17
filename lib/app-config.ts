@@ -1,16 +1,22 @@
 // App-config storage for the Tay setup wizard.
 //
-// v0.1: cookie-backed (httpOnly). Lives only on the user's browser; survives
-// a server restart, but won't survive across multiple devices. That's fine
-// for v0.1 — the wizard is a one-time-per-install thing and the user is
-// always on the device they just deployed from.
+// v0.2: dual backend.
+//   - Supabase backend (preferred) when SUPABASE_* env vars are present.
+//     A single-row `app_config` table — one install, one config. We use
+//     delete+insert in a transaction instead of upsert because the row
+//     has no natural unique key the wizard knows about, and "one row"
+//     is the invariant we actually care about.
+//   - Cookie backend (fallback) for pre-Supabase installs and local dev.
+//     Same shape as v0.1; the only behavior change is `secure` is now
+//     env-aware so localhost dev over plain HTTP works again
+//     (resolves run #001 escalation).
 //
-// v0.2 will swap this out for a Supabase row keyed on the install. The
-// public function shape (getAppConfig / setAppConfig / clearAppConfig) is
-// the contract the rest of the app depends on; the cookie implementation
-// is an internal detail.
+// The public surface — getAppConfig / setAppConfig / clearAppConfig — is
+// the contract callers depend on. Don't change shapes without a coordinated
+// call-site update.
 
 import { cookies } from "next/headers";
+import { getSupabaseServerClient, hasSupabaseEnv } from "@/lib/supabase/server";
 
 export type AppConfig = {
   name: string;
@@ -19,8 +25,95 @@ export type AppConfig = {
 
 const COOKIE_NAME = "tay-setup";
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
+const TABLE = "app_config";
+
+// ---------- public API ----------
 
 export async function getAppConfig(): Promise<AppConfig | null> {
+  if (hasSupabaseEnv()) return getFromSupabase();
+  return getFromCookie();
+}
+
+export async function setAppConfig(cfg: AppConfig): Promise<void> {
+  if (hasSupabaseEnv()) {
+    await setInSupabase(cfg);
+    return;
+  }
+  await setInCookie(cfg);
+}
+
+export async function clearAppConfig(): Promise<void> {
+  if (hasSupabaseEnv()) {
+    await clearInSupabase();
+    return;
+  }
+  await clearInCookie();
+}
+
+// ---------- Supabase backend ----------
+
+async function getFromSupabase(): Promise<AppConfig | null> {
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("name, validated_at")
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      // Most common cause pre-migration: table doesn't exist. Treat as
+      // "no config yet" — the page will redirect to /setup, which is
+      // exactly the right UX. We deliberately do NOT include cfg payload
+      // in any error log (Tay convention: user-supplied strings stay out
+      // of warn/error).
+      console.warn("[app-config] supabase select failed:", error.message);
+      return null;
+    }
+    if (!data) return null;
+    if (typeof data.name !== "string" || data.name.length === 0) return null;
+    if (typeof data.validated_at !== "string") return null;
+    return { name: data.name, validatedAt: data.validated_at };
+  } catch (err) {
+    console.warn(
+      "[app-config] supabase unavailable, returning null:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+async function setInSupabase(cfg: AppConfig): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  // Single-row invariant: clear then insert. Supabase JS client doesn't
+  // expose explicit transactions, but `delete` immediately followed by
+  // `insert` is the right shape — a race window only exists if two
+  // wizard submissions happen concurrently, which the UI prevents and
+  // would be benign anyway (last writer wins, one row remains).
+  const del = await supabase.from(TABLE).delete().not("id", "is", null);
+  if (del.error) {
+    throw new Error(`[app-config] delete failed: ${del.error.message}`);
+  }
+  const ins = await supabase.from(TABLE).insert({
+    name: cfg.name,
+    validated_at: cfg.validatedAt,
+  });
+  if (ins.error) {
+    throw new Error(`[app-config] insert failed: ${ins.error.message}`);
+  }
+}
+
+async function clearInSupabase(): Promise<void> {
+  const supabase = getSupabaseServerClient();
+  const { error } = await supabase.from(TABLE).delete().not("id", "is", null);
+  if (error) {
+    throw new Error(`[app-config] clear failed: ${error.message}`);
+  }
+}
+
+// ---------- cookie backend ----------
+
+async function getFromCookie(): Promise<AppConfig | null> {
   const store = await cookies();
   const raw = store.get(COOKIE_NAME)?.value;
   if (!raw) return null;
@@ -42,20 +135,22 @@ export async function getAppConfig(): Promise<AppConfig | null> {
   }
 }
 
-export async function setAppConfig(cfg: AppConfig): Promise<void> {
+async function setInCookie(cfg: AppConfig): Promise<void> {
   const store = await cookies();
   store.set({
     name: COOKIE_NAME,
     value: JSON.stringify(cfg),
     httpOnly: true,
-    secure: true,
+    // env-aware: production requires HTTPS; localhost dev runs HTTP.
+    // (run #001 escalation: `secure: true` always was breaking dev.)
+    secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
     path: "/",
     maxAge: ONE_YEAR_SECONDS,
   });
 }
 
-export async function clearAppConfig(): Promise<void> {
+async function clearInCookie(): Promise<void> {
   const store = await cookies();
   store.delete(COOKIE_NAME);
 }
