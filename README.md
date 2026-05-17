@@ -9,6 +9,7 @@ Tay finds prospects, writes them in your voice, and books meetings — running o
 - An [OpenRouter API key](https://openrouter.ai/keys) — one key for any model (Claude, GPT, Gemini, Llama, etc.). Tay uses the model you pick to draft, judge, and research (~$20/month for moderate use on a mid-tier model)
 - A free [Vercel](https://vercel.com/signup) account — hosts your Tay instance
 - A free [Supabase](https://supabase.com/) account — stores your prospects, drafts, and audit log
+- A [Google Cloud OAuth client](https://console.cloud.google.com/apis/credentials) — "Web application" type, with `${NEXT_PUBLIC_SITE_URL}/api/auth/google/callback` as an authorized redirect URI; scope `gmail.send` (send only, no read)
 - 15 minutes for first-time setup
 
 ## Install in 3 steps
@@ -23,11 +24,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.6 — audit log v1 (tamper-evident sha256 hash chain)
+## Status: v0.7 — Gmail OAuth + send path
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.6 makes the audit log REAL. Every Tier-3 action (today: every judge decision; in v0.7+: every Gmail send, every reply, every suppression update) writes a row to `audit_log` with a sha256 hash chain — each row's `this_hash` is computed over `prev_hash + canonical_json(payload) + occurred_at + action`. The `/audit` page shows the latest 50 events and a green/red verifier badge. `GET /api/audit/verify` walks the chain end-to-end and returns `{ ok, totalRows, lastHash | brokenAt }` — scriptable proof of integrity from anywhere. NO send yet — that's v0.7.
+v0.7 is the first PR where Tay actually emits to the outside world. You connect your own Gmail (scope: `gmail.send` only, no read). Drafts the judge marked `allow` show in `/queue`. Click Send and Tay calls Gmail's API directly — your tokens, your account, your data. Every send writes a `sent_messages` row, appends to the audit log (`send.sent`), and records a trust event (`send` / `sent`). OAuth tokens are encrypted at rest with AES-256-GCM under a key you set in `TAY_OAUTH_SECRET` (32 bytes hex); without that key, the OAuth flow refuses to start. Suppression check (`lib/suppression/check.ts`) is a stub that always returns false in v0.7 — v0.8 wires the real list.
 
 ## Env vars
 
@@ -40,6 +41,10 @@ v0.6 makes the audit log REAL. Every Tier-3 action (today: every judge decision;
 | `NEXT_PUBLIC_SUPABASE_URL` | Auto-set by the Vercel + Supabase Marketplace integration | yes |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Auto-set by the integration | yes |
 | `SUPABASE_SERVICE_ROLE_KEY` | Auto-set by the integration | yes |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID from Google Cloud Console — required for v0.7 send path | yes (v0.7+) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret paired with the ID above | yes (v0.7+) |
+| `TAY_OAUTH_SECRET` | 64 hex chars (32 bytes). Encrypts OAuth tokens at rest. Generate with `openssl rand -hex 32` | yes (v0.7+) |
+| `NEXT_PUBLIC_SITE_URL` | Public URL of your Tay deploy. Used to build the OAuth redirect URI | yes (v0.7+) |
 
 For local development, copy [.env.example](./.env.example) to `.env.local` and fill in values.
 

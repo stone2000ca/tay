@@ -113,6 +113,45 @@ CREATE INDEX IF NOT EXISTS judge_decisions_decision_created_at_idx
 CREATE INDEX IF NOT EXISTS audit_log_occurred_at_idx
   ON audit_log (occurred_at DESC, id DESC);
 `,
+  "0006_google_oauth.sql": `
+CREATE TABLE IF NOT EXISTS google_oauth (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email_address text NOT NULL,
+  refresh_token_encrypted text NOT NULL,
+  access_token_encrypted text,
+  access_token_expires_at timestamptz,
+  scopes text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
+  "0007_sent_messages_and_trust.sql": `
+CREATE TABLE IF NOT EXISTS sent_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  draft_id uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+  prospect_id uuid NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  gmail_message_id text NOT NULL,
+  gmail_thread_id text NOT NULL,
+  subject text NOT NULL,
+  body text NOT NULL,
+  recipient_email text NOT NULL,
+  sent_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS sent_messages_prospect_id_sent_at_idx
+  ON sent_messages (prospect_id, sent_at DESC);
+
+CREATE TABLE IF NOT EXISTS trust_events (
+  id bigserial PRIMARY KEY,
+  capability text NOT NULL CHECK (capability IN ('send','reply_send','book')),
+  event_type text NOT NULL CHECK (event_type IN ('sent','blocked_by_judge','blocked_by_suppression','override_to_send','override_to_skip','bounced','complained','replied_positive','replied_negative')),
+  metadata jsonb NOT NULL,
+  occurred_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS trust_events_capability_event_type_idx
+  ON trust_events (capability, event_type);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -240,6 +279,13 @@ function sentinelFor(file: string): Sentinel {
       // 0001 so a table sentinel would say "already there" and skip
       // the index. Check for the index itself.
       return { kind: "index", index: "audit_log_occurred_at_idx" };
+    case "0006_google_oauth.sql":
+      return { kind: "table", table: "google_oauth" };
+    case "0007_sent_messages_and_trust.sql":
+      // 0007 creates two tables — pick the one that strictly belongs to
+      // this migration (sent_messages — trust_events is also unique to
+      // 0007 but sent_messages is the more semantically central one).
+      return { kind: "table", table: "sent_messages" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

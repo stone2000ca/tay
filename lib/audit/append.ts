@@ -39,7 +39,10 @@ export type AuditAction =
   | "draft.created"
   | "send.sent"
   | "reply.sent"
-  | "suppression.added";
+  | "suppression.added"
+  // v0.7 additions — OAuth connect/disconnect.
+  | "oauth.connected"
+  | "oauth.disconnected";
 
 export type AuditEvent = {
   action: AuditAction;
