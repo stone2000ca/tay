@@ -1,25 +1,29 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #004)
-**Current milestone:** v0.5 (next to ship)
-**Roadmap progress:** 5/10 milestones merged
+**Last updated:** 2026-05-17 (Run #005)
+**Current milestone:** v0.6 (next to ship)
+**Roadmap progress:** 6/10 milestones merged
 
 ## Currently in flight
 
-(None — run #004 closed cleanly.)
+(None — run #005 closed cleanly.)
 
 ## Next up
 
-- **v0.5: Judge v1 — 4-way decision over drafts (allow / block / revise / escalate).**
-  - New `lib/judge/` library: reads draft + rubric + (placeholder) suppression check; calls `MODELS.quality` via OpenRouter with `response_format: json_object` and a strict decision schema (`{ decision: "allow"|"block"|"revise"|"escalate", reasons: string[], rewrite?: { subject, body } }`)
-  - Wires into v0.4's `generateAndSaveDraft` flow: every draft → judge → display the decision alongside the draft
-  - New `judge_decisions` table: `(id, draft_id FK, decision, reasons jsonb, rewrite jsonb, model_used, created_at)`
-  - **AI disclosure footer:** judge MUST verify the footer is present (Tay gate C as a check, not just a write); if missing → revise
-  - **Tay gate B (special-category data):** judge MUST flag block if draft mentions race/religion/health/SO/political/biometric/genetic features about the prospect
-  - **Tay gate H (adversarial-input defenses):** draft body wrapped in `<untrusted_source>` when fed to judge; structured-output schema; defensive parse
-  - **Tay gate F (audit log, partial):** judge decisions are first-class audit events — wire `appendAudit` placeholder now (real hash chain in v0.6)
-  - Address v0.5 paper-cut targets from prior judge reviews (see "Blocked / awaiting input")
-  - Out of scope this milestone: actual sending (v0.7), real hash chain (v0.6), reply handling (v0.9)
+- **v0.6: Audit log v1 — every draft + decision logged with hash chain.**
+  - Replace `lib/audit/append.ts` stub with the real implementation:
+    - Read `prev_hash` from latest `audit_log` row (sha256 hex, 64 chars; `prev_hash = null` for first row)
+    - Compute `this_hash = sha256(prev_hash + canonical_json(payload) + occurred_at_iso + action)`
+    - INSERT atomically (transaction or single insert from canonical payload)
+    - Idempotent under retry: actions are inherently new events (don't dedupe; just append)
+  - New `/api/audit/verify` (GET) — walks the chain, recomputes hashes, returns `{ ok, totalRows, brokenAt? }`
+  - Optional: `/audit` page showing recent events + verifier badge
+  - Backfill: existing `judge_decisions` rows don't have audit rows yet — but since v0.5's stub already called `appendAudit` with operational metadata, the v0.6 implementation just starts the chain fresh from the next call. Document this transition.
+  - Address v0.5 carry-forwards:
+    1. Tighten `appendAudit` redactor matcher OR tighten the comment + add a test that asserts each named protected key gets redacted (judge's improvement #1)
+    2. `neuter()` belt-and-braces on `<untrusted_source` opener (one-line)
+    3. `sanitizeReasons` cap-vs-reject — document rationale at call site
+  - Out of scope: sending (v0.7), suppression (v0.8), reply handling (v0.9), JOURNEYS (v1.0)
 
 ## Blocked / awaiting input
 
@@ -28,12 +32,12 @@
 - **First-user smoke test recommended** — paste real `OPENROUTER_API_KEY`, calibrate voice, draft a sample email. If `anthropic/claude-3.5-haiku` 404s on the user's OpenRouter account, swap `VALIDATION_MODEL` to `openai/gpt-4o-mini`.
 - **Live Supabase not yet provisioned** — three migrations (0001, 0002, 0003 coming in v0.4) all unverified against real Postgres. Mitigations: idempotent CREATE IF NOT EXISTS, transactional DDL, inline-SQL fallback.
 - **Vercel project not linked to GitHub repo** — preview URLs not captured on PRs.
-- **Paper cuts to address in v0.5:**
-  - `/setup/voice` should surface "Supabase not configured" banner instead of wedging in a redirect loop (v0.3 judge)
-  - Define `SAMPLE_COUNT` once and import in both UI and extractor (v0.3 judge)
-  - Pre-flight `hasSupabaseEnv()` check in `generateAndSaveDraft` (avoid wasted LLM calls on misconfigured deploys) (v0.4 judge)
-  - Notes-field `</untrusted_source>` injection sanitizer + test (v0.4 judge)
-  - Synthesized-email edge cases: company labels like `"Acme Inc."` produce `acme-inc-.invalid` (RFC 1035 violation); unicode-different names collide (v0.4 judge — best fixed when real email field lands)
+- **Paper cuts to address in v0.6:**
+  - `appendAudit` redactor doc-vs-impl drift (v0.5 judge): comment claims it redacts `email`/`body`/`raw`, but matcher only catches `api_key`/`secret`/`token`/`password`. Either tighten the matcher or tighten the comment; add a test per protected key. Becomes load-bearing in v0.7 when send-event callers come online.
+  - `neuter()` belt-and-braces on the `<untrusted_source` opener (v0.5 judge)
+  - `sanitizeReasons` cap-vs-reject — document the design choice at the call site (v0.5 judge)
+- **Carried (best fixed in a later run with the right context):**
+  - Synthesized-email edge cases — punt to when a real email field lands
 
 ## Recent learnings
 
@@ -59,7 +63,7 @@
 | v0.2 | Supabase Marketplace integration + auto-migrations + UI shell with nav | MERGED | #002 (2026-05-17) | [#3](https://github.com/stone2000ca/tay/pull/3) — `1bcf341e` |
 | v0.3 | Voice calibration — paste 5 emails, extract rubric, save to DB | MERGED | #003 (2026-05-17) | [#5](https://github.com/stone2000ca/tay/pull/5) — `27840442` |
 | v0.4 | Drafter v1 — type a prospect's name + company → generated draft | MERGED | #004 (2026-05-17) | [#7](https://github.com/stone2000ca/tay/pull/7) — `d445d7c0` |
-| v0.5 | Judge v1 — 4-way decision over drafts | NOT_STARTED | — | — |
+| v0.5 | Judge v1 — 4-way decision over drafts | MERGED | #005 (2026-05-17) | [#9](https://github.com/stone2000ca/tay/pull/9) — `d0aab4d1` |
 | v0.6 | Audit log v1 — every draft + decision logged with hash chain | NOT_STARTED | — | — |
 | v0.7 | Gmail OAuth + send path | NOT_STARTED | — | — |
 | v0.8 | Suppression list + unsubscribe handling | NOT_STARTED | — | — |

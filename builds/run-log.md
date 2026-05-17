@@ -155,6 +155,36 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #005 — (not yet started)
+## Run #005 — 2026-05-17 (~19 min)
 
-Next invocation will pick up v0.5 (Judge v1 — 4-way decision over drafts). Reads draft + rubric + suppression (n/a until v0.8); returns allow/block/revise/escalate. Wires into v0.4's flow: every draft passes through the judge BEFORE display. Tay gate F (audit-log writes) becomes relevant — judge decisions are first-class audit events.
+**Milestone:** v0.5 — Judge v1 + audit-log stub + v0.3/v0.4 paper cuts
+**Status transition:** NOT_STARTED → MERGED
+**PR:** [#9](https://github.com/stone2000ca/tay/pull/9) — squashed as `d0aab4d1`
+**Judge:** Process 5/5, Product 4/5 — APPROVED
+
+### What landed
+- Migration `0004_judge_decisions.sql` (CHECK constraint on decision; FK CASCADE; two indexes)
+- `lib/judge/` — decision-schema (hard validator) + prompt (4 decisions, gates B/C/D/H criteria, rubric verbatim, untrusted_source wrap, JSON-only) + judge (MODELS.quality, temp 0.2, response_format json_object, defensive parse) + persist (read-vs-write contract)
+- `lib/audit/append.ts` — stub for v0.6's hash chain; never throws; defensive redactor on a small set of secret-like keys
+- Wired into `app/draft/actions.ts`: pre-flight `hasSupabaseEnv` → generate → saveDraft → judge → saveJudgeDecision → appendAudit. Judge failure = degraded-mode visibility (draft saved + amber banner).
+- 4 of 5 paper cuts cleared (Supabase warning banner via server component; SAMPLE_COUNT hoisted; pre-flight env check; closing-tag neuter in both drafter and judge prompts). Synthesized-email RFC/unicode punted.
+- 96/96 tests (added 47)
+
+### Notable
+- THE LOAD-BEARING MILESTONE. All four Tay gates wired as VERIFICATION, not just trust.
+- Judge gave 4/5 product (not 5/5) for `appendAudit` doc-vs-impl drift — the comment claims it redacts email/body/raw but the matcher only catches api_key/secret/token/password. No active leak in v0.5 (no callers pass email) but v0.7 send-event callers must not trust the doc. Fix in v0.6.
+- `appendAudit` is the contract surface — v0.6 will rewrite it to the real hash chain without touching call sites.
+
+### v0.6 carry-forwards
+1. `appendAudit` redactor — tighten matcher OR tighten comment (judge's improvement #1: make the doc executable via test)
+2. `neuter()` belt-and-braces on `<untrusted_source` opener (one-line)
+3. `sanitizeReasons` cap-vs-reject — document the rationale at the call site
+
+### Detailed checkpoint
+`builds/checkpoints/run-005-2026-05-17.md`
+
+---
+
+## Run #006 — (not yet started)
+
+Next invocation will pick up v0.6 (Audit log v1 — every draft/decision logged with hash chain). Replace `appendAudit` stub with sha256 chain: read prev_hash from latest row, compute `this_hash = sha256(prev_hash + json(payload) + occurred_at)`, insert atomically. Add `/api/audit/verify` endpoint returning chain integrity. Address the 3 v0.5 flags. Tay gate F finally fully live.
