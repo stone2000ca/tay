@@ -142,7 +142,14 @@ Return ONLY the JSON decision object: { "decision": ..., "reasons": [...], "rewr
  * and inject sibling content the model might interpret as instructions.
  * Belt-and-braces alongside the response_format json_object constraint
  * and the parseJudgeDecision hard validator (Tay gate H).
+ *
+ * v0.6 belt-and-braces: also rewrite the OPENING tag `<untrusted_source`
+ * (with or without attributes) so an attacker can't open a fake wrapper
+ * block before injecting a fake closer. The closing tag is the real
+ * escape vector but defense-in-depth says cover both.
  */
 function neuter(s: string): string {
-  return s.replaceAll("</untrusted_source>", "[/untrusted_source]");
+  return s
+    .replaceAll("</untrusted_source>", "[/untrusted_source]")
+    .replace(/<untrusted_source\b/g, "[untrusted_source");
 }

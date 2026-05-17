@@ -1,20 +1,38 @@
 // Audit log surface — Tay gate F.
 //
-// v0.5: this is a NO-OP STUB. We wire `appendAudit` at every Tier-3 call
-// site now (judge decisions in v0.5, send in v0.7, reply-send in v0.9,
-// suppression updates in v0.8) so v0.6 can swap the real hash-chain
-// implementation in WITHOUT touching the call sites.
+// v0.6: REAL implementation. Replaces the v0.5 no-op stub. Every call to
+// `appendAudit` writes a row to `audit_log` with a tamper-evident sha256
+// hash chain: `this_hash = sha256(prev_hash + canonical_json(payload) +
+// occurred_at + action)`. Public API (`appendAudit({ action, payload })
+// => Promise<void>`) is UNCHANGED from v0.5 so existing callers in
+// app/draft/actions.ts keep working.
 //
-// v0.6 will:
-//   - Read the previous row's `this_hash` from `audit_log`
-//   - Compute `this_hash = sha256(prev_hash || canonicalJson(payload))`
-//   - INSERT (occurred_at, action, payload, prev_hash, this_hash)
-//   - Make the chain verifiable via a separate reader
+// READ-VS-WRITE error contract: `appendAudit` is the exception to the
+// "WRITE throws, READ soft-fails" rule that applies elsewhere (see
+// lib/judge/persist.ts header). Audit is BEST-EFFORT: an audit-write
+// failure must never block the user's send path. The chain-break, if it
+// happens, is surfaced by the verifier (lib/audit/verify.ts) on demand.
 //
-// Redaction policy (v0.5 + v0.6): callers must pass payloads that have
-// ALREADY been redacted — never include raw PII, never include the full
-// email body, never include the OpenRouter key. The v0.5 stub also
-// defensively trims known-large fields below as belt-and-braces.
+// REDACTOR POLICY DECISION (Approach A — wide matcher, v0.6):
+// The v0.5 stub's redactor had drift between its header doc ("redacts
+// email/body/raw") and its matcher (only api_key/secret/token/password).
+// v0.6 closes the drift by EXPANDING the matcher to cover the bodies
+// and PII-shaped keys the doc claimed. This becomes load-bearing in
+// v0.7 when send-event callers come online with `to`, `from`, `body`,
+// `raw_message` payloads. Each protected key has a parameterized test
+// asserting the redaction fires. Callers are still EXPECTED to
+// pre-redact — this layer is belt-and-braces.
+//
+// Concurrency caveat: v0.6 is single-tenant single-user. Two parallel
+// `appendAudit` calls could race on `prev_hash` (both read the same
+// last-row hash, both insert with the same `prev_hash`). The verifier
+// would flag this as a `prev_hash_mismatch`. Acceptable for v0.6;
+// v1.0 candidate to upgrade to a row-level lock or SERIALIZABLE
+// transaction. Documented here so the next engineer doesn't have to
+// re-derive it from first principles.
+
+import { getSupabaseServerClient, hasSupabaseEnv } from "../supabase/server";
+import { computeHash } from "./hash";
 
 export type AuditAction =
   | "judge.decision"
@@ -28,51 +46,155 @@ export type AuditEvent = {
   payload: Record<string, unknown>;
 };
 
+const TABLE = "audit_log";
+
 /**
- * Append a Tier-3 event to the audit log.
+ * Append a Tier-3 event to the audit log with sha256 hash chain.
  *
- * v0.5: prints a redacted line to the server log. Never throws.
- * v0.6: writes to `audit_log` with hash chain. Will still never throw
- *       (audit failure must not block the user's send path; the chain
- *       break will be flagged by the verifier instead).
+ * Behavior:
+ *   - Reads the latest row's `this_hash` from `audit_log` (single
+ *     query). Uses it as `prev_hash`. Sets to null for the first row.
+ *   - Redacts the payload via `redactPayload` BEFORE hashing — the
+ *     on-disk record matches what was hashed.
+ *   - Computes `occurred_at` (ISO string) BEFORE the DB write so the
+ *     hash is deterministic.
+ *   - Inserts (occurred_at, action, payload, prev_hash, this_hash).
+ *   - Never throws — audit is best-effort.
+ *
+ * Cold-start safety: if Supabase env is missing, logs a [audit]
+ * skipped line and returns. Same pattern as `ensureSchema()`.
  */
 export async function appendAudit(event: AuditEvent): Promise<void> {
   try {
-    const safePayload = redactPayload(event.payload);
-    console.log(
-      `[audit:stub] action=${event.action} payload=${JSON.stringify(safePayload)}`,
+    if (!hasSupabaseEnv()) {
+      console.log(
+        `[audit] skipped — no Supabase (action=${event.action})`,
+      );
+      return;
+    }
+
+    const occurred_at = new Date().toISOString();
+    const redactedPayload = redactPayload(event.payload);
+
+    const supabase = getSupabaseServerClient();
+
+    // Read the latest row's this_hash. Single query, indexed on
+    // (occurred_at DESC, id DESC). Returns null for the first row.
+    const latest = await supabase
+      .from(TABLE)
+      .select("this_hash")
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latest.error) {
+      console.warn(
+        "[audit] latest-row read failed:",
+        latest.error.message,
+      );
+      return;
+    }
+
+    const prev_hash: string | null =
+      (latest.data?.this_hash as string | undefined) ?? null;
+
+    const this_hash = computeHash({
+      prev_hash,
+      payload: redactedPayload,
+      occurred_at,
+      action: event.action,
+    });
+
+    const ins = await supabase.from(TABLE).insert({
+      occurred_at,
+      action: event.action,
+      payload: redactedPayload,
+      prev_hash,
+      this_hash,
+    });
+
+    if (ins.error) {
+      console.warn(
+        "[audit] write failed:",
+        ins.error.message,
+      );
+      return;
+    }
+  } catch (err) {
+    // Audit is best-effort. Never throw — the user's pipeline must
+    // not break because the audit log is unreachable.
+    console.warn(
+      "[audit] write failed:",
+      err instanceof Error ? err.message : String(err),
     );
-  } catch {
-    // Never propagate — audit is best-effort even in v0.5.
   }
 }
 
 /**
- * Defensive redaction. Callers SHOULD pre-redact; this is belt-and-
- * braces for known-large or known-sensitive keys. Anything called
- * "body", "email", "api_key", "raw" gets either truncated or replaced.
+ * Defensive redaction (Approach A — wide matcher, v0.6).
+ *
+ * Matches any key whose lowercased name CONTAINS one of:
+ *   - secret-shaped: api_key, apikey, secret, token, password
+ *   - PII-shaped:    email, body, raw_body, raw, prospect_email
+ *
+ * For matched keys: replace with "[redacted]".
+ * For unmatched string values >200 chars: truncate with marker.
+ * Recurses into nested objects; maps over arrays.
+ *
+ * Callers MUST still pre-redact PII at the call site — this layer is
+ * belt-and-braces and the per-key matcher cannot catch
+ * differently-named-but-still-PII fields like `recipient` or `addr`.
  */
-function redactPayload(
-  payload: Record<string, unknown>,
-): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(payload)) {
-    const lower = key.toLowerCase();
-    if (
-      lower.includes("api_key") ||
-      lower.includes("apikey") ||
-      lower.includes("secret") ||
-      lower.includes("token") ||
-      lower.includes("password")
-    ) {
-      out[key] = "[redacted]";
-      continue;
-    }
-    if (typeof value === "string" && value.length > 200) {
-      out[key] = value.slice(0, 200) + "…[truncated]";
-      continue;
-    }
-    out[key] = value;
+export function redactPayload(payload: unknown): Record<string, unknown> {
+  const out = redactValue(payload);
+  // Top-level always returns an object shape — callers pass objects.
+  if (out && typeof out === "object" && !Array.isArray(out)) {
+    return out as Record<string, unknown>;
   }
-  return out;
+  // Defensive: if a non-object slipped in, wrap it.
+  return { value: out };
+}
+
+const PROTECTED_KEY_FRAGMENTS = [
+  "api_key",
+  "apikey",
+  "secret",
+  "token",
+  "password",
+  "email",
+  "body",
+  "raw_body",
+  "raw",
+  "prospect_email",
+] as const;
+
+function isProtectedKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  return PROTECTED_KEY_FRAGMENTS.some((frag) => lower.includes(frag));
+}
+
+function redactValue(value: unknown): unknown {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(redactValue);
+  if (typeof value === "object") {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const [key, v] of Object.entries(obj)) {
+      if (isProtectedKey(key)) {
+        out[key] = "[redacted]";
+        continue;
+      }
+      if (typeof v === "string" && v.length > 200) {
+        out[key] = `${v.slice(0, 200)}<TRUNCATED:${v.length}>`;
+        continue;
+      }
+      out[key] = redactValue(v);
+    }
+    return out;
+  }
+  if (typeof value === "string" && value.length > 200) {
+    return `${value.slice(0, 200)}<TRUNCATED:${value.length}>`;
+  }
+  return value;
 }

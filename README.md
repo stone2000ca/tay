@@ -23,11 +23,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.5 — judge v1 (4-way decision over drafts)
+## Status: v0.6 — audit log v1 (tamper-evident sha256 hash chain)
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.5 wires the judge into the drafter flow. Every draft now passes through a strict reviewer LLM before display — it returns one of four decisions (`allow` / `block` / `revise` / `escalate`) and the UI renders it alongside the draft. The judge verifies Tay gates B (no special-category data), C (AI disclosure footer), D (voice rubric adherence), and H (adversarial-input defenses) as VERIFICATION rather than trusting the drafter. Decisions persist to a new `judge_decisions` table and emit a Tier-3 audit event (real hash chain lands in v0.6). NO send yet — that's v0.7.
+v0.6 makes the audit log REAL. Every Tier-3 action (today: every judge decision; in v0.7+: every Gmail send, every reply, every suppression update) writes a row to `audit_log` with a sha256 hash chain — each row's `this_hash` is computed over `prev_hash + canonical_json(payload) + occurred_at + action`. The `/audit` page shows the latest 50 events and a green/red verifier badge. `GET /api/audit/verify` walks the chain end-to-end and returns `{ ok, totalRows, lastHash | brokenAt }` — scriptable proof of integrity from anywhere. NO send yet — that's v0.7.
 
 ## Env vars
 

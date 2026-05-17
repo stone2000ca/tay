@@ -72,6 +72,24 @@ export function parseJudgeDecision(input: unknown): JudgeDecision | null {
   return { decision: "escalate", reasons };
 }
 
+/**
+ * Sanitize the reasons array from the judge LLM.
+ *
+ * DESIGN CHOICE — cap-vs-reject (documented v0.6 carry-forward from
+ * v0.5 judge): when a reason entry exceeds `reasonMaxLen` (500 chars),
+ * we TRUNCATE it (`.slice(0, reasonMaxLen)`) rather than reject the
+ * whole decision. Rationale: a verbose reason is a signal of model
+ * verbosity, NOT a brand-safety hole — the decision itself (the load-
+ * bearing field) is still trustworthy, and we'd rather yield a usable
+ * decision with a clipped reason than make the user re-roll the LLM
+ * call for a stylistic issue. v0.7+ may revisit if we see truncation
+ * happening often enough to be a signal worth surfacing in the UI.
+ *
+ * Note: this trade-off is specific to `reasons`. `rewrite.subject` and
+ * `rewrite.body` exceeding their caps DO cause rejection — they're
+ * load-bearing send content where partial truncation could change
+ * meaning in dangerous ways.
+ */
 function sanitizeReasons(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const out: string[] = [];
