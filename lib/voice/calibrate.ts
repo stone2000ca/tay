@@ -26,11 +26,10 @@ import {
   getSupabaseServerClient,
   hasSupabaseEnv,
 } from "../supabase/server";
+import { SAMPLE_MIN_COUNT, SAMPLE_MAX_COUNT } from "./constants";
 
 const TABLE = "voice_calibration";
 
-const SAMPLE_MIN_COUNT = 3;
-const SAMPLE_MAX_COUNT = 10;
 const SAMPLE_MIN_LEN = 20;
 const SAMPLE_MAX_LEN = 4000;
 
