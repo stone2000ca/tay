@@ -114,6 +114,53 @@ export async function removeSuppression(email: string): Promise<void> {
 }
 
 /**
+ * Look up a single suppression entry by email. Used by /u/[token] to
+ * deterministically distinguish "first valid click" from "replay click"
+ * BEFORE upserting — replaces the v0.8 5-second heuristic.
+ *
+ * READ function — soft-fails to null.
+ */
+export async function getSuppressionEntry(
+  email: string,
+): Promise<SuppressionEntry | null> {
+  if (!hasSupabaseEnv()) return null;
+  const normalized = (email ?? "").trim().toLowerCase();
+  if (!normalized) return null;
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("email_lower, reason, source, added_at")
+      .eq("email_lower", normalized)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn("[suppression] entry lookup failed:", error.message);
+      return null;
+    }
+    if (!data) return null;
+    const row = data as {
+      email_lower: string;
+      reason: SuppressionReason;
+      source: string;
+      added_at: string;
+    };
+    return {
+      email: row.email_lower,
+      reason: row.reason,
+      source: row.source,
+      addedAt: row.added_at,
+    };
+  } catch (err) {
+    console.warn(
+      "[suppression] entry lookup unavailable:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
  * List the most recent suppression entries. Default 100.
  *
  * READ function — soft-fails to []. The settings page must always render.

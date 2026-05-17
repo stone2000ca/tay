@@ -24,11 +24,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.8 — Suppression list + unsubscribe handling
+## Status: v0.9 — Reply handler (inbound poll + threaded LLM classification)
 
-This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
+This is the early-access build. The setup wizard, judge, drafter, suppression list, audit log, and now reply ingestion land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.8 makes Tay gate E (suppression) load-bearing: a real `suppression` table, real `isSuppressed()` check (safe-default `true` on uncertainty — Tay under-sends rather than over-sends to a possibly-suppressed prospect), and a per-recipient unsubscribe link injected into every new draft's footer. The unsubscribe link is an HMAC-signed token (uses the same `TAY_OAUTH_SECRET` as v0.7's encryption); clicking it adds the recipient to the suppression list AND appends a `user.unsubscribed` audit event. Manage the list under Settings → Suppression. v0.7 carry-forwards: DB-level UNIQUE constraint on `sent_messages.draft_id` (backstops the orchestrator's race), `sendDraftAction` now redirects with `?error=` on failure (user sees a banner), `saveGoogleOAuth` refactored to atomic UPSERT, and `subject` joined the audit redactor's protected-key list.
+v0.9 closes the loop: Tay polls Gmail every 5 minutes (Vercel Cron → `/api/cron/poll-gmail`) for new inbound replies, classifies each reply's intent via an LLM (`interested` / `not_interested` / `out_of_office` / `unsubscribe_request` / `other`) under HARD adversarial-input defenses (Tay gate H — `<untrusted_source>` wrapping, neuter() rewriting, system-prompt instruction-ignore directive, `response_format: json_object`, hard schema validator), records trust events per outcome, auto-suppresses on `unsubscribe_request`, and — only when the user explicitly enables it under Settings — auto-drafts a reply for `interested` messages. Auto-reply is OFF by default; enabling it is recorded as a trust event. View ingested replies + classifications at `/replies`. Re-consent on Gmail is required for pre-v0.9 connections (the new scope is `gmail.readonly` alongside the existing `gmail.send`). v0.8 carry-forwards: bad-kind unsubscribe-token reject test, `console.warn` on disclosure token-generation failure, static import for suppression helpers in `/u/[token]`, and a deterministic read-before-upsert (replaces the 5-second age heuristic) for the replay-click UX.
 
 ## Env vars
 
@@ -45,6 +45,7 @@ v0.8 makes Tay gate E (suppression) load-bearing: a real `suppression` table, re
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret paired with the ID above | yes (v0.7+) |
 | `TAY_OAUTH_SECRET` | 64 hex chars (32 bytes). Encrypts OAuth tokens at rest. Generate with `openssl rand -hex 32` | yes (v0.7+) |
 | `NEXT_PUBLIC_SITE_URL` | Public URL of your Tay deploy. Used to build the OAuth redirect URI | yes (v0.7+) |
+| `CRON_SECRET` | Bearer token Vercel Cron forwards when triggering `/api/cron/poll-gmail`. Generate with `openssl rand -hex 32`. Without it, the cron route returns 401 and Tay never polls for replies | yes (v0.9+) |
 
 For local development, copy [.env.example](./.env.example) to `.env.local` and fill in values.
 

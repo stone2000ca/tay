@@ -178,6 +178,40 @@ BEGIN
   END IF;
 END$$;
 `,
+  "0009_replies_and_reply_drafts.sql": `
+-- v0.9 inbound replies + reply drafts + Gmail poll cursor + auto-reply toggle.
+CREATE TABLE IF NOT EXISTS replies (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  gmail_message_id text NOT NULL UNIQUE,
+  gmail_thread_id text NOT NULL,
+  sent_message_id uuid REFERENCES sent_messages(id) ON DELETE SET NULL,
+  from_email text NOT NULL,
+  subject text,
+  body text NOT NULL,
+  received_at timestamptz NOT NULL,
+  classified_intent text,
+  classification_model text,
+  classified_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS replies_thread_id_idx ON replies (gmail_thread_id);
+CREATE INDEX IF NOT EXISTS replies_received_at_idx ON replies (received_at DESC);
+
+ALTER TABLE drafts ADD COLUMN IF NOT EXISTS reply_to_id uuid REFERENCES replies(id) ON DELETE SET NULL;
+
+CREATE TABLE IF NOT EXISTS gmail_poll_cursor (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  last_history_id text NOT NULL,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS reply_settings (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  auto_reply_enabled boolean NOT NULL DEFAULT false,
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -320,6 +354,12 @@ function sentinelFor(file: string): Sentinel {
       // the constraint exists but the table somehow doesn't would still
       // be safe.
       return { kind: "table", table: "suppression" };
+    case "0009_replies_and_reply_drafts.sql":
+      // 0009 creates `replies`, `gmail_poll_cursor`, `reply_settings` AND
+      // alters `drafts` to add `reply_to_id`. The `replies` table is the
+      // strictly-stronger signal: if it exists, this migration ran. The
+      // ALTER is idempotent via ADD COLUMN IF NOT EXISTS.
+      return { kind: "table", table: "replies" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

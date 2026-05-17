@@ -50,11 +50,20 @@ function buildFooter(recipientEmail: string | undefined): string {
   let token: string;
   try {
     token = generateUnsubscribeToken(recipientEmail);
-  } catch {
+  } catch (err) {
     // TAY_OAUTH_SECRET missing or malformed — fall back. We never want
     // a missing-secret to break drafting. The send path will still be
     // blocked upstream (the orchestrator and OAuth flow both require
     // the same secret), but at minimum the user can preview the draft.
+    //
+    // v0.9 addition: warn so operators see the misconfiguration. Without
+    // this, the only visible signal is "no link in the footer" — easy to
+    // miss in a green-on-green deployment. Never log the recipient (Tay
+    // logging rule).
+    console.warn(
+      "[disclosure] token generation failed:",
+      err instanceof Error ? err.message : "unknown",
+    );
     return AI_DISCLOSURE_FOOTER;
   }
   const base = siteUrl.replace(/\/+$/, "");

@@ -132,6 +132,36 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
     expect(() => generateUnsubscribeToken("a@b.co")).toThrow(/malformed/);
   });
 
+  test("token with a non-unsubscribe kind is rejected with 'bad_kind'", async () => {
+    // Mint a payload signed with the same secret but with kind="password_reset".
+    // Signature passes; the kind check is what catches it. Defense in depth
+    // against reusing the same HMAC secret for different token kinds in the
+    // future without explicit per-kind discrimination.
+    const { createHmac } = await import("node:crypto");
+    const { verifyUnsubscribeToken } = await import("./token");
+    const payload = {
+      email: "alice@example.com",
+      exp: Math.floor(Date.now() / 1000) + 3600,
+      kind: "password_reset",
+    };
+    const payloadB64 = Buffer.from(JSON.stringify(payload), "utf8")
+      .toString("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const key = Buffer.from(TEST_SECRET, "hex");
+    const sig = createHmac("sha256", key)
+      .update(payloadB64)
+      .digest("base64")
+      .replace(/\+/g, "-")
+      .replace(/\//g, "_")
+      .replace(/=+$/, "");
+    const token = `${payloadB64}.${sig}`;
+    const out = verifyUnsubscribeToken(token);
+    expect(out.ok).toBe(false);
+    if (!out.ok) expect(out.reason).toBe("bad_kind");
+  });
+
   test("verifyUnsubscribeToken throws when secret missing (route catches it)", async () => {
     // generate first (with secret set), then drop the secret to simulate
     // deploy-time misconfig at verify time.

@@ -51,7 +51,13 @@ export type AuditAction =
   | "oauth.disconnected"
   // v0.8 additions — suppression list management + unsubscribe.
   | "suppression.removed"
-  | "user.unsubscribed";
+  | "user.unsubscribed"
+  // v0.9 additions — inbound reply pipeline.
+  | "reply.received"
+  | "reply.classified"
+  | "reply.draft_generated"
+  // v0.9 — explicit user toggle for auto-reply (trust-tier decision).
+  | "reply.auto_reply_toggled";
 
 export type AuditEvent = {
   action: AuditAction;
