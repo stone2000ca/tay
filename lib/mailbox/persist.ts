@@ -22,8 +22,13 @@
 //   - If empty AND the legacy google_oauth table has a row, it returns
 //     that row as { kind: "oauth", ... } — existing v0.7+ installs keep
 //     working WITHOUT requiring the user to reconnect.
-//   - The first call to saveMailboxCredentials writes to the new table,
-//     after which the new table wins on subsequent reads.
+//   - v1.1.2 OAuth callback writes to BOTH the legacy google_oauth row
+//     (for the existing send-path consumers that still read from there)
+//     AND the new mailbox_credentials row. New connections therefore
+//     resolve via Step 1 of the read path; only pre-v1.1.2 connections
+//     fall through to Step 2.
+//   - SMTP App Password connections write only to mailbox_credentials —
+//     they never existed in the legacy table.
 //   - clearMailboxCredentials deletes from BOTH tables so "disconnect"
 //     is a clean slate regardless of which path the user originally took.
 

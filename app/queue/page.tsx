@@ -1,4 +1,4 @@
-// /queue — the v0.7 review-and-send surface.
+// /queue — the v0.7 review-and-send surface (v1.1.2 channel-aware).
 //
 // Server component. Lists drafts where:
 //   - latest judge_decisions row has decision = 'allow'
@@ -8,11 +8,15 @@
 // Each row: prospect + subject + body preview + "Send" button. Send is
 // a server-action POST per row (no client JS).
 //
-// Wizard degraded-state matrix:
+// Wizard degraded-state matrix (v1.1.2):
 //   - Supabase not configured → render SupabaseWarning + empty list.
-//   - TAY_OAUTH_SECRET missing → red banner "encryption secret missing".
-//   - Gmail not connected → orange banner "connect Gmail under Settings".
-//   - Voice rubric missing → orange banner.
+//   - OAuth crypto secret missing → red banner "encryption secret missing".
+//     (Still relevant for SMTP — we use the same secret to encrypt App
+//      Passwords at rest.)
+//   - Mailbox not connected (neither OAuth nor SMTP) → amber banner
+//     "Mailbox not connected" pointing at Settings.
+//   - Voice rubric missing → amber banner.
+//   - SMTP-mode connected → interim "reply polling next update" banner.
 //   - No allow-able drafts → empty-state message.
 //
 // All degraded states render the page; none redirect-loop.
@@ -22,7 +26,6 @@ import { SupabaseWarning } from "@/components/supabase-warning";
 import { hasSupabaseEnv, getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
-import { getGoogleOAuth } from "@/lib/oauth/persist";
 import { getMailboxKind } from "@/lib/mailbox/persist";
 import { getRubric } from "@/lib/voice/calibrate";
 import { sendDraftAction } from "./actions";
@@ -57,8 +60,7 @@ export default async function QueuePage({
 
   await ensureSchema();
 
-  const [oauth, rubric, rows, oauthSecretOk, mailboxKind] = await Promise.all([
-    getGoogleOAuth(),
+  const [rubric, rows, oauthSecretOk, mailboxKind] = await Promise.all([
     getRubric(),
     loadQueueRows(),
     hasOAuthSecret(),
@@ -71,7 +73,7 @@ export default async function QueuePage({
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Queue</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Drafts the judge approved. Click Send to deliver via your Gmail.
+            Drafts the judge approved. Click Send to deliver via your connected mailbox.
           </p>
         </div>
         <Link
@@ -91,12 +93,12 @@ export default async function QueuePage({
       {!oauthSecretOk && (
         <Banner kind="red">
           <strong>OAuth crypto secret unreachable.</strong>{" "}
-          Configure SUPABASE_SERVICE_ROLE_KEY (or the legacy TAY_OAUTH_SECRET fallback), redeploy, and reconnect Gmail before sending.
+          Configure SUPABASE_SERVICE_ROLE_KEY (or the legacy TAY_OAUTH_SECRET fallback), redeploy, and reconnect your mailbox before sending.
         </Banner>
       )}
-      {oauthSecretOk && !oauth && (
+      {oauthSecretOk && !mailboxKind && (
         <Banner kind="amber">
-          <strong>Gmail not connected.</strong>{" "}
+          <strong>Mailbox not connected.</strong>{" "}
           <Link href="/settings" className="underline">
             Connect under Settings
           </Link>{" "}
@@ -130,7 +132,7 @@ export default async function QueuePage({
             .
           </div>
         ) : (
-          <QueueTable rows={rows} canSend={!!oauth && !!rubric && oauthSecretOk} />
+          <QueueTable rows={rows} canSend={!!mailboxKind && !!rubric && oauthSecretOk} />
         )}
       </section>
     </main>

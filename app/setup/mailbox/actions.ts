@@ -111,9 +111,31 @@ export async function verifyAndSaveSmtp(input: {
  * Disconnect the current mailbox (both new + legacy tables). Used by
  * the wizard "Reconnect" button and the Settings page disconnect button.
  *
- * Redirects with a flash param — the caller decides where to land.
+ * Invoked via `<form action={disconnectMailboxAction}>`, so the runtime
+ * passes a FormData. The caller can include a `redirectTo` hidden field
+ * to control where the user lands after disconnect — Settings keeps the
+ * user on Settings, the wizard sends them back to the wizard step.
+ *
+ * Defaults to /setup/mailbox?disconnected=1 (wizard behavior) when no
+ * redirectTo is provided.
  */
-export async function disconnectMailboxAction(): Promise<void> {
+export async function disconnectMailboxAction(
+  formData?: FormData,
+): Promise<void> {
+  const rawTarget =
+    typeof formData?.get === "function"
+      ? formData.get("redirectTo")
+      : null;
+  // Only honor same-origin relative paths — never let the form smuggle
+  // an external URL into the redirect.
+  const target =
+    typeof rawTarget === "string" && rawTarget.startsWith("/")
+      ? rawTarget
+      : "/setup/mailbox?disconnected=1";
+  const errorTarget = target.includes("?")
+    ? `${target.split("?")[0]}?error=disconnect_failed`
+    : `${target}?error=disconnect_failed`;
+
   try {
     await clearMailboxCredentials();
     await appendAudit({
@@ -125,7 +147,7 @@ export async function disconnectMailboxAction(): Promise<void> {
       "[mailbox actions] disconnect failed:",
       err instanceof Error ? err.message : String(err),
     );
-    redirect("/setup/mailbox?error=disconnect_failed");
+    redirect(errorTarget);
   }
-  redirect("/setup/mailbox?disconnected=1");
+  redirect(target);
 }

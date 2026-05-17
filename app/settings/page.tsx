@@ -50,10 +50,10 @@ export default async function SettingsPage({
       </p>
 
       {params.connected && (
-        <FlashBanner kind="green">Gmail connected successfully.</FlashBanner>
+        <FlashBanner kind="green">Mailbox connected successfully.</FlashBanner>
       )}
       {params.disconnected && (
-        <FlashBanner kind="amber">Gmail disconnected.</FlashBanner>
+        <FlashBanner kind="amber">Mailbox disconnected.</FlashBanner>
       )}
       {params.auto_reply === "on" && (
         <FlashBanner kind="green">Auto-reply drafting is now ON.</FlashBanner>
@@ -96,6 +96,11 @@ export default async function SettingsPage({
                 Reconnect / switch mode
               </Link>
               <form action={disconnectMailboxAction}>
+                <input
+                  type="hidden"
+                  name="redirectTo"
+                  value="/settings?disconnected=1"
+                />
                 <button
                   type="submit"
                   className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"

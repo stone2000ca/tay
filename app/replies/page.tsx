@@ -91,13 +91,23 @@ export default async function RepliesPage() {
           Configure SUPABASE_SERVICE_ROLE_KEY (or the legacy TAY_OAUTH_SECRET fallback), redeploy, and reconnect Gmail.
         </Banner>
       )}
-      {oauthSecretOk && !oauth && (
+      {oauthSecretOk && !mailboxKind && (
         <Banner kind="amber">
-          <strong>Gmail not connected.</strong>{" "}
+          <strong>Mailbox not connected.</strong>{" "}
           <Link href="/settings" className="underline">
             Connect under Settings
           </Link>{" "}
           to start ingesting replies.
+        </Banner>
+      )}
+      {oauthSecretOk && mailboxKind === "oauth" && !oauth && (
+        <Banner kind="amber">
+          <strong>Gmail OAuth row missing.</strong>{" "}
+          The mailbox is marked as OAuth-connected but the underlying token
+          row could not be read.{" "}
+          <Link href="/settings" className="underline">
+            Reconnect under Settings
+          </Link>.
         </Banner>
       )}
       {oauth && !readScopeOk && (
