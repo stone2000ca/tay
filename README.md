@@ -9,7 +9,7 @@ Tay finds prospects, writes them in your voice, and books meetings — running o
 - An LLM API key — bring your own from [Anthropic](https://console.anthropic.com/settings/keys), [OpenAI](https://platform.openai.com/api-keys), or [OpenRouter](https://openrouter.ai/keys). The wizard auto-detects the provider; you paste the key into the in-app setup, not your env vars.
 - A free [Vercel](https://vercel.com/signup) account — hosts your Tay instance
 - A free [Supabase](https://supabase.com/) account — stores your prospects, drafts, and audit log
-- A [Google Cloud OAuth client](https://console.cloud.google.com/apis/credentials) — "Web application" type, with `${SITE_URL}/api/auth/google/callback` as an authorized redirect URI; scopes `gmail.send` + `gmail.readonly`
+- A Gmail account — either (a) **Easy mode** (v1.1.2): personal Gmail with 2-Step Verification on, generate an [App Password](https://myaccount.google.com/apppasswords), takes ~2 minutes. Or (b) **Power mode**: a [Google Cloud OAuth client](https://console.cloud.google.com/apis/credentials) — "Web application" with `${SITE_URL}/api/auth/google/callback` as redirect URI; scopes `gmail.send` + `gmail.readonly`. Power is required for Workspace accounts and passkey-only Google accounts.
 - 10 minutes for first-time setup
 
 ## Install in 3 steps
@@ -24,9 +24,17 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v1.1.1 — secrets foundation for 10-minute non-tech install
+## Status: v1.1.2 — SMTP send (Easy mode) for 10-minute non-tech install
 
-The first milestone after the v1.0 SHIP GATE. v1.1.1 ships the secrets foundation that lets a non-technical user install Tay without touching a terminal:
+v1.1.2 ships the SMTP App Password path so non-technical users on personal Gmail can connect in ~2 minutes instead of doing the ~20-minute Google Cloud OAuth dance.
+
+- **Wizard mailbox step** (`/setup/mailbox`) — two-column choice: **Easy** (Gmail App Password) or **Power** (Google OAuth). Easy is recommended for personal Gmail; Power is required for Workspace and for passkey-only Google accounts (where App Passwords are no longer offered).
+- **SMTP via nodemailer** — `lib/send/smtp.ts` opens a single-shot STARTTLS connection to `smtp.gmail.com:587`, authenticates with the App Password, and sends. Message-ID is generated server-side so v1.1.2.5 (next update) can match IMAP replies by `In-Reply-To`. The orchestrator (`lib/send/orchestrate.ts`) is now channel-aware: same suppression / judge / audit / trust gates on both transports.
+- **Unified mailbox credentials** — new `mailbox_credentials` table replaces `google_oauth` as the primary read target. Backwards-compat fallback to `google_oauth` keeps existing v0.7+ OAuth installs working without forcing a reconnect.
+- **App Password verification** — `lib/send/smtp-verify.ts` runs an STARTTLS handshake at wizard time so wrong-password / wrong-host / TLS / passkey-only cases surface BEFORE the credentials are persisted. Auth failures route the user to the "try Power mode" suggestion (passkey-only Google accounts can't generate App Passwords).
+- **Interim banner** — `/queue` and `/replies` show an amber banner when SMTP mode is active: "Reply polling activates in the next update (v1.1.2.5)." Sends work now; IMAP polling for the SMTP channel ships separately.
+
+### Earlier — v1.1.1: secrets foundation
 
 - **Derived per-purpose secrets** — `TAY_OAUTH_SECRET` is gone from your env. The OAuth-token AES key and the unsubscribe HMAC are derived via HKDF-SHA256(`SUPABASE_SERVICE_ROLE_KEY`, `instance_secrets.salt`, per-purpose `info`) on every request. The salt is minted automatically on first cold start and lives in your own Supabase. (Legacy `TAY_OAUTH_SECRET` is still accepted as a fallback for v0.x installs upgrading in place.) `CRON_SECRET` is NOT derived — Vercel Cron's auth mechanism reads `process.env.CRON_SECRET` directly, and Vercel auto-sets it for any project with a `vercel.json` cron config. Non-Vercel deploys must set it manually like any other env var.
 - **BYO LLM provider** — Tay now supports Anthropic (`sk-ant-…`), OpenAI (`sk-…`), and OpenRouter (`sk-or-…`) via auto-detection from the key prefix. The wizard collects your key in-app, encrypts it (AES-256-GCM via the derived OAuth secret), and stores it in `instance_secrets`. Drafter / judge / reply / voice all use a provider-neutral `chatComplete` adapter.

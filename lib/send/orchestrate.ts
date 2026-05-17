@@ -1,24 +1,41 @@
-// Send orchestrator — the SINGLE chokepoint for "send a draft" in Tay v0.7.
+// Send orchestrator — the SINGLE chokepoint for "send a draft" in Tay.
 //
-// No other code in the repo is allowed to call lib/send/gmail.ts directly.
-// Going through this seam guarantees every send goes through:
+// v1.1.2: channel-aware. The orchestrator dispatches to either the
+// Gmail OAuth transport (lib/send/gmail.ts) OR the SMTP transport
+// (lib/send/smtp.ts) based on what kind of mailbox the user connected.
+// The chokepoint property is preserved — no caller is allowed to invoke
+// the channel modules directly. Going through this seam guarantees
+// every send goes through:
 //
 //   1. App config exists (the user has finished setup)
-//   2. Voice rubric exists (the drafter contract is in force) — Tay gate D
-//      enforced UPSTREAM at draft time; orchestrator confirms via presence.
+//   2. Voice rubric exists (the drafter contract is in force) — Tay
+//      gate D enforced UPSTREAM at draft time; orchestrator confirms
+//      via presence.
 //   3. Supabase configured (we can record the send)
-//   4. OAuth configured + not-expired-unrefreshably
+//   4. Mailbox connected (kind: oauth | app_password) — Tay gate E's
+//      precondition; without it we have nowhere to send.
 //   5. Judge decision = "allow" — Tay gate C disclosure was verified
-//      upstream by the v0.5 judge; revise/block/escalate never reach here.
-//   6. isSuppressed(recipient) — Tay gate E
-//   7. ensureFreshAccessToken — refresh if needed
-//   8. sendEmail(...)
-//   9. saveSentMessage(...)
-//  10. appendAudit("send.sent", ...) — Tay gate F
-//  11. recordTrustEvent("send", "sent", ...) — Tay gate I
+//      upstream by the v0.5 judge; revise/block/escalate never reach
+//      here. Tay gate I trust event for blocks lives here.
+//   6. isSuppressed(recipient) — Tay gate E. Called BEFORE the channel
+//      branch so suppression-respect is identical across both
+//      transports. (Asserted by gate-ordering test for BOTH channels.)
+//   7. Channel branch:
+//        - oauth → ensureFreshAccessToken + sendEmail (gmail.ts)
+//        - app_password → sendEmailViaSmtp (smtp.ts) — no token refresh
+//   8. Persist sent_messages row (column name gmail_message_id is
+//      legacy; v1.1.2 stores the provider's message-id there
+//      regardless of channel — rename out of scope).
+//   9. appendAudit("send.sent", channel) — Tay gate F.
+//  10. recordTrustEvent("send", "sent", channel) — Tay gate I.
 //
 // Each precondition failure returns a friendly { ok: false, error } so
-// the LLM/Gmail calls are never burned for a known-bad request.
+// the network calls are never burned for a known-bad request.
+//
+// Tay gate C reminder: disclosure footer is applied at draft generation
+// (drafter wraps with withDisclosure). SMTP/Gmail transports BOTH carry
+// the body unchanged, so the gate-C invariant is preserved across both
+// channels by construction.
 //
 // READ-VS-WRITE: orchestrator is a WRITE chokepoint. It returns a
 // discriminated union (never throws to caller) because the caller is a
@@ -32,8 +49,10 @@ import { getAppConfig } from "../app-config";
 import { getLatestDecisionForDraft } from "../judge/persist";
 import { ensureFreshAccessToken } from "../oauth/persist";
 import { sendEmail } from "./gmail";
+import { sendEmailViaSmtp } from "./smtp";
 import { isSuppressed } from "../suppression/check";
 import { recordTrustEvent } from "../trust/record";
+import { getMailboxCredentials } from "../mailbox/persist";
 
 const DRAFTS_TABLE = "drafts";
 const PROSPECTS_TABLE = "prospects";
@@ -42,9 +61,12 @@ const SENT_TABLE = "sent_messages";
 export type SendDraftResult =
   | {
       ok: true;
+      /** Legacy field name; populated regardless of channel. */
       gmailMessageId: string;
+      /** Gmail-only. SMTP has no native thread id; empty string in that case. */
       gmailThreadId: string;
       recipient: string;
+      channel: "oauth" | "app_password";
     }
   | { ok: false; error: string };
 
@@ -77,6 +99,18 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
       ok: false,
       error:
         "Voice rubric missing. Complete voice calibration at /setup/voice before sending.",
+    };
+  }
+
+  // v1.1.2: channel-agnostic mailbox precondition. Soft-fails to null
+  // when no mailbox is connected; we need to surface a friendly error
+  // BEFORE any of the per-draft loads run.
+  const mailbox = await getMailboxCredentials();
+  if (!mailbox) {
+    return {
+      ok: false,
+      error:
+        "Connect a mailbox in Settings before sending (Gmail OAuth or SMTP App Password).",
     };
   }
 
@@ -158,6 +192,7 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
     await recordTrustEvent("send", "blocked_by_judge", {
       draftId,
       decision: decision.decision,
+      channel: mailbox.kind,
     });
     return {
       ok: false,
@@ -166,11 +201,17 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
   }
 
   // -- Suppression gate (Tay gate E) ------------------------------------
+  //
+  // Placed BEFORE the channel branch so it applies uniformly to both
+  // OAuth and SMTP transports. The gate-ordering test asserts this for
+  // both channels — moving the check inside one branch would break the
+  // invariant.
 
   const suppressed = await isSuppressed(recipient);
   if (suppressed) {
     await recordTrustEvent("send", "blocked_by_suppression", {
       draftId,
+      channel: mailbox.kind,
       // Don't include the email in metadata — it'd leak into trust_events.
       // The orchestrator's job is to block; the suppression list is the
       // record of WHICH email is suppressed.
@@ -181,29 +222,64 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
     };
   }
 
-  // -- Refresh access token (throws on failure) ------------------------
+  // -- Channel branch --------------------------------------------------
+  //
+  // SHAPES:
+  //   - oauth path returns { gmailMessageId, gmailThreadId }
+  //   - smtp path returns { messageId, threadId? } (threadId undefined)
+  // Normalize at the seam so the persist + audit + trust paths below
+  // see a single shape.
 
-  let accessToken: string;
-  try {
-    accessToken = await ensureFreshAccessToken();
-  } catch (err) {
-    return {
-      ok: false,
-      error: err instanceof Error ? err.message : String(err),
-    };
+  type Sent =
+    | { ok: true; providerMessageId: string; providerThreadId: string }
+    | { ok: false; error: string };
+
+  let sent: Sent;
+  if (mailbox.kind === "oauth") {
+    let accessToken: string;
+    try {
+      accessToken = await ensureFreshAccessToken();
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    const result = await sendEmail({
+      accessToken,
+      to: recipient,
+      subject: draft.subject,
+      body: draft.body,
+    });
+    sent = result.ok
+      ? {
+          ok: true,
+          providerMessageId: result.gmailMessageId,
+          providerThreadId: result.gmailThreadId,
+        }
+      : { ok: false, error: result.error };
+  } else {
+    // app_password
+    const result = await sendEmailViaSmtp({
+      host: mailbox.smtpHost,
+      port: mailbox.smtpPort,
+      username: mailbox.emailAddress,
+      password: mailbox.password,
+      fromAddress: mailbox.emailAddress,
+      to: recipient,
+      subject: draft.subject,
+      body: draft.body,
+    });
+    sent = result.ok
+      ? {
+          ok: true,
+          providerMessageId: result.messageId,
+          providerThreadId: result.threadId ?? "",
+        }
+      : { ok: false, error: result.error };
   }
-
-  // -- Send -----------------------------------------------------------
-
-  const sent = await sendEmail({
-    accessToken,
-    to: recipient,
-    subject: draft.subject,
-    body: draft.body,
-  });
   if (!sent.ok) {
-    // Gmail-side failure. Don't record as "sent" trust event — it wasn't.
-    // v0.8+ may want a "send_attempt_failed" event type to power retries.
+    // Channel-side failure. Don't record as "sent" trust event — it wasn't.
     return { ok: false, error: sent.error };
   }
 
@@ -214,14 +290,14 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
   // the insert with a duplicate-key error. The read-then-write check
   // above (already-sent guard) covers the SEQUENTIAL case nicely; this
   // catches the CONCURRENT case where two callers both got past the
-  // read. Gmail was called (we can't undo it), but at least we surface
-  // a clear error and don't double-record.
+  // read. The provider was called (we can't undo it), but at least we
+  // surface a clear error and don't double-record.
 
   const insSent = await supabase.from(SENT_TABLE).insert({
     draft_id: draftId,
     prospect_id: prospect.id,
-    gmail_message_id: sent.gmailMessageId,
-    gmail_thread_id: sent.gmailThreadId,
+    gmail_message_id: sent.providerMessageId,
+    gmail_thread_id: sent.providerThreadId,
     subject: draft.subject,
     body: draft.body,
     recipient_email: recipient,
@@ -239,10 +315,10 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
         error: "This draft has already been sent.",
       };
     }
-    // Gmail did send. Don't unwind. Record audit anyway with a flag so
+    // Send did happen. Don't unwind. Record audit anyway with a flag so
     // the user can see "send happened but local record failed".
     console.warn(
-      "[send] sent_messages insert failed (Gmail send already happened):",
+      "[send] sent_messages insert failed (provider send already happened):",
       insSent.error.message,
     );
   }
@@ -254,7 +330,12 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
     payload: {
       draftId,
       prospectId: prospect.id,
-      gmailMessageId: sent.gmailMessageId,
+      // v1.1.2: channel field — distinguishes oauth vs app_password sends
+      // in the audit log so the hash chain reflects which transport.
+      channel: mailbox.kind,
+      // Legacy field name kept for log-stream compat; populated for both
+      // channels (SMTP uses the generated Message-ID).
+      providerMessageId: sent.providerMessageId,
       // recipient_email is matched by the redactor's "email" key fragment
       // → appears as [redacted] in audit_log. We send it anyway because
       // the redactor is the source of truth for what's safe-at-rest.
@@ -266,15 +347,17 @@ export async function sendDraft(draftId: string): Promise<SendDraftResult> {
   // -- Trust event (Tay gate I) ----------------------------------------
 
   await recordTrustEvent("send", "sent", {
-    gmailMessageId: sent.gmailMessageId,
+    providerMessageId: sent.providerMessageId,
     draftId,
+    channel: mailbox.kind,
   });
 
   return {
     ok: true,
-    gmailMessageId: sent.gmailMessageId,
-    gmailThreadId: sent.gmailThreadId,
+    gmailMessageId: sent.providerMessageId,
+    gmailThreadId: sent.providerThreadId,
     recipient,
+    channel: mailbox.kind,
   };
 }
 

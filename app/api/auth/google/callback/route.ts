@@ -16,6 +16,7 @@ import { redirect } from "next/navigation";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { exchangeCodeForTokens, getProfileEmail } from "@/lib/oauth/google";
 import { saveGoogleOAuth } from "@/lib/oauth/persist";
+import { saveMailboxCredentials } from "@/lib/mailbox/persist";
 import { appendAudit } from "@/lib/audit/append";
 import { getSiteUrl } from "@/lib/site-url";
 
@@ -89,6 +90,31 @@ export async function GET(request: Request) {
       expiresIn: tokens.expiresIn,
       scope: tokens.scope,
     });
+    // v1.1.2: also mirror into the new mailbox_credentials table so the
+    // unified read path (getMailboxCredentials / getMailboxKind) returns
+    // the OAuth record directly instead of going through the legacy
+    // google_oauth fallback on every call. Belt-and-braces — if this
+    // mirror write fails, the legacy fallback path still works.
+    try {
+      const expiresAt = tokens.expiresIn
+        ? new Date(Date.now() + tokens.expiresIn * 1000).toISOString()
+        : null;
+      await saveMailboxCredentials({
+        kind: "oauth",
+        emailAddress: email,
+        refreshToken: tokens.refreshToken,
+        accessToken: tokens.accessToken,
+        expiresAt,
+        scopes: tokens.scope,
+      });
+    } catch (mirrorErr) {
+      // Non-fatal: legacy table holds the credentials and the fallback
+      // read path handles it. Surface for ops debugging only.
+      console.warn(
+        "[oauth] mailbox_credentials mirror write failed (non-fatal):",
+        mirrorErr instanceof Error ? mirrorErr.message : String(mirrorErr),
+      );
+    }
     await appendAudit({
       action: "oauth.connected",
       payload: {

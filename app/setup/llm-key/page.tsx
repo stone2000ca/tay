@@ -77,7 +77,7 @@ function LlmKeyForm() {
             {isRotation ? "Rotate your LLM key" : "Add your LLM key"}
           </h1>
           <p className="mt-2 text-sm text-gray-500">
-            {isRotation ? "Replaces the active key" : "Step 2 of 3 — bring your own key"}
+            {isRotation ? "Replaces the active key" : "Step 2 of 4 — bring your own key"}
           </p>
         </div>
 

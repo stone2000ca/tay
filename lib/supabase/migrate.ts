@@ -249,6 +249,28 @@ CREATE TABLE IF NOT EXISTS instance_secrets (
   updated_at timestamptz NOT NULL DEFAULT now()
 );
 `,
+  "0012_mailbox_credentials.sql": `
+-- v1.1.2: unified mailbox credentials supporting both Gmail OAuth and SMTP
+-- App Password. Replaces v0.7's google_oauth table as the new primary read
+-- target; google_oauth stays as a backwards-compat fallback (lazy
+-- migration). Single-row pattern (lock_col UNIQUE DEFAULT 1).
+CREATE TABLE IF NOT EXISTS mailbox_credentials (
+  lock_col integer NOT NULL DEFAULT 1 UNIQUE,
+  kind text NOT NULL CHECK (kind IN ('oauth', 'app_password')),
+  email_address text NOT NULL,
+  oauth_refresh_token_encrypted text,
+  oauth_access_token_encrypted text,
+  oauth_access_token_expires_at timestamptz,
+  oauth_scopes text,
+  smtp_password_encrypted text,
+  smtp_host text,
+  smtp_port integer,
+  imap_host text,
+  imap_port integer,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -411,6 +433,11 @@ function sentinelFor(file: string): Sentinel {
       // populating the lone row on first cold start — that's not a
       // migration concern.
       return { kind: "table", table: "instance_secrets" };
+    case "0012_mailbox_credentials.sql":
+      // 0012 creates the single mailbox_credentials table. The lazy
+      // migration from google_oauth happens in lib/mailbox/persist.ts on
+      // first read after deploy.
+      return { kind: "table", table: "mailbox_credentials" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

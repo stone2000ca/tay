@@ -64,7 +64,7 @@ export function VoiceCalibrationForm() {
       <div className="max-w-2xl w-full">
         <div className="text-center">
           <h1 className="text-3xl font-semibold tracking-tight">Calibrate your voice</h1>
-          <p className="mt-2 text-sm text-gray-500">Step 2 of the wizard</p>
+          <p className="mt-2 text-sm text-gray-500">Step 4 of 4 — calibrate your voice</p>
           <p className="mt-4 text-sm text-gray-600">
             Paste {SAMPLE_COUNT} of your own outbound emails. Tay reads them and
             extracts a stylistic rubric — opener style, sentence length,
