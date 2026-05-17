@@ -115,6 +115,46 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #004 — (not yet started)
+## Run #004 — 2026-05-17 (~12 min)
 
-Next invocation will pick up v0.4 (Drafter v1 — type a prospect's name + company → generated draft). Reads the voice rubric saved in v0.3; uses `MODELS.quality`; ships an AI disclosure footer skeleton even though full footer-injection wires in v0.5/v0.7.
+**Milestone:** v0.4 — Drafter v1 (prospect → AI-drafted email constrained by voice rubric)
+**Status transition:** NOT_STARTED → MERGED
+**PR:** [#7](https://github.com/stone2000ca/tay/pull/7) — squashed as `d445d7c0`
+**Judge:** Process 5/5, Product 5/5 — APPROVED, no fix-pass needed. First 5/5 product score.
+
+### What landed
+
+- Migration `0003_drafts.sql` — new `drafts` table (FK to prospects with ON DELETE CASCADE; `rubric_snapshot` + `prompt_inputs` jsonb for v0.5 re-judge) + `ALTER TABLE prospects ADD COLUMN notes`
+- `lib/draft/disclosure.ts` — `withDisclosure` idempotent footer injection (Tay gate C)
+- `lib/draft/prompt.ts` — system + user message builder; rubric as binding constraint; prospect data in `<untrusted_source field="...">` blocks (Tay gate H)
+- `lib/draft/generate.ts` — LLM call via `MODELS.quality`; `response_format: json_object`; defensive JSON parse with fence stripping; shape validation; SDK error mapping suppresses raw text
+- `lib/draft/persist.ts` — upsertProspect + saveDraft (WRITE, throws) + getDraftCount (READ, soft-fails to null)
+- `app/draft/` — form + server action with cold-start `ensureSchema()` guard
+- `app/page.tsx` — dashboard cascade (app_config → voice rubric → dashboard with /draft link + count card)
+- `components/nav.tsx` — Draft link added between Dashboard and Setup
+- `lib/supabase/migrate.ts` — sentinel pre-check refactored to `{kind: "table"|"column"}` for ALTER-bearing migrations
+- 49/49 tests passing (was 29; added 20)
+
+### Notable
+
+- First milestone where all four named Tay gates (B/C/D/H) apply simultaneously. Defense layers stack: response_format json_object + fence stripper + shape validator + length caps + disclosure injector + system-prompt rules + adversarial wrappers + input ASCII-bound. Every layer has a test.
+- Migration runner sentinel handles fresh install, upgrade-from-v0.3, and steady state correctly (judge verified).
+- `upsertProspect` synthesizes `unknown+<name>@<company>.invalid` placeholder email because `prospects.email` is NOT NULL (0001 schema decision). RFC 2606 `.invalid` TLD guarantees no routing. v0.5 will add a real email field.
+- Judge improvement: orchestrator should commit/push `run-NNN-IN_PROGRESS.md` BEFORE spawning the agent so the judge can read it from the agent's worktree (currently lives only in orchestrator worktree).
+
+### v0.5 paper-cut targets (carried forward)
+
+- Synthesized-email edge cases: company labels like `"Acme Inc."` produce `acme-inc-.invalid` (RFC 1035 violation); unicode-different names map to same synthesized email
+- Notes-field `</untrusted_source>` injection sanitizer + test
+- Pre-flight `hasSupabaseEnv()` check in `generateAndSaveDraft` (avoid wasted LLM calls on misconfigured deploys)
+- `/setup/voice` "Supabase not configured" banner (from v0.3 judge)
+- Define `SAMPLE_COUNT` once and import (from v0.3 judge)
+
+### Detailed checkpoint
+`builds/checkpoints/run-004-2026-05-17.md`
+
+---
+
+## Run #005 — (not yet started)
+
+Next invocation will pick up v0.5 (Judge v1 — 4-way decision over drafts). Reads draft + rubric + suppression (n/a until v0.8); returns allow/block/revise/escalate. Wires into v0.4's flow: every draft passes through the judge BEFORE display. Tay gate F (audit-log writes) becomes relevant — judge decisions are first-class audit events.
