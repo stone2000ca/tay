@@ -1,17 +1,208 @@
-// Placeholder Settings page — v0.2 just makes the nav route resolve.
-// Real configuration surfaces land as Tay grows (voice rubric, ICP,
-// suppression list, trust tiers, etc.).
+// Settings — Tay v0.7 makes this real.
+//
+// Sections:
+//   - Gmail (connected email + Disconnect, or Connect button)
+//   - OAuth secret status (green if TAY_OAUTH_SECRET set, red otherwise)
+//   - Supabase status (green/red)
+//   - OpenRouter status (green/red)
+//
+// Read-only EXCEPT the Disconnect button, which is a server action that
+// deletes the google_oauth row + appendAudit + redirects.
 
-export default function SettingsPage() {
+import { hasSupabaseEnv } from "@/lib/supabase/server";
+import { hasOAuthSecret } from "@/lib/oauth/crypto";
+import { getGoogleOAuth } from "@/lib/oauth/persist";
+import { disconnectGmailAction } from "./actions";
+
+export const dynamic = "force-dynamic";
+
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ connected?: string; error?: string; disconnected?: string }>;
+}) {
+  const params = await searchParams;
+  const oauth = hasSupabaseEnv() && hasOAuthSecret() ? await getGoogleOAuth() : null;
+
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
-      <div className="rounded-2xl border border-gray-200 bg-white p-8 shadow-sm">
-        <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-3 text-sm text-gray-600">
-          Configuration options will land here as Tay grows. v0.2 just makes
-          the nav route resolve.
-        </p>
-      </div>
+      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
+      <p className="mt-1 text-sm text-gray-500">
+        Configuration and integration status for your Tay instance.
+      </p>
+
+      {params.connected && (
+        <FlashBanner kind="green">Gmail connected successfully.</FlashBanner>
+      )}
+      {params.disconnected && (
+        <FlashBanner kind="amber">Gmail disconnected.</FlashBanner>
+      )}
+      {params.error && (
+        <FlashBanner kind="red">{describeError(params.error)}</FlashBanner>
+      )}
+
+      <Section title="Gmail">
+        {oauth ? (
+          <div className="space-y-3">
+            <div>
+              <span className="text-sm text-gray-500">Connected as: </span>
+              <span className="text-sm font-medium text-gray-900">
+                {oauth.emailAddress}
+              </span>
+            </div>
+            <form action={disconnectGmailAction}>
+              <button
+                type="submit"
+                className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+              >
+                Disconnect Gmail
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              Tay needs Gmail send access to deliver drafts. Scope:{" "}
+              <code className="text-xs">gmail.send</code> (send only, no
+              read).
+            </p>
+            <a
+              href="/api/auth/google/start"
+              className="inline-block rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-black"
+            >
+              Connect Gmail
+            </a>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Integration status">
+        <ul className="space-y-2 text-sm">
+          <StatusRow
+            ok={hasOAuthSecret()}
+            label="TAY_OAUTH_SECRET"
+            help="32-byte hex string (64 chars). Encrypts OAuth tokens at rest."
+          />
+          <StatusRow
+            ok={hasSupabaseEnv()}
+            label="Supabase"
+            help="Link via Vercel Marketplace. Stores drafts, decisions, audit log, and OAuth tokens."
+          />
+          <StatusRow
+            ok={Boolean(process.env.OPENROUTER_API_KEY)}
+            label="OpenRouter API key"
+            help="Required for drafting, judging, and voice calibration."
+          />
+          <StatusRow
+            ok={Boolean(process.env.GOOGLE_OAUTH_CLIENT_ID)}
+            label="GOOGLE_OAUTH_CLIENT_ID"
+            help="From console.cloud.google.com/apis/credentials."
+          />
+          <StatusRow
+            ok={Boolean(process.env.GOOGLE_OAUTH_CLIENT_SECRET)}
+            label="GOOGLE_OAUTH_CLIENT_SECRET"
+            help="From the same Google Cloud OAuth client as the ID."
+          />
+          <StatusRow
+            ok={Boolean(process.env.NEXT_PUBLIC_SITE_URL)}
+            label="NEXT_PUBLIC_SITE_URL"
+            help="Used to build the OAuth redirect URI."
+          />
+        </ul>
+      </Section>
     </main>
   );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="mt-8 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+      <h2 className="text-lg font-semibold tracking-tight">{title}</h2>
+      <div className="mt-4">{children}</div>
+    </section>
+  );
+}
+
+function StatusRow({
+  ok,
+  label,
+  help,
+}: {
+  ok: boolean;
+  label: string;
+  help: string;
+}) {
+  return (
+    <li className="flex items-start gap-3">
+      <span
+        aria-label={ok ? "configured" : "missing"}
+        className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${
+          ok ? "bg-green-500" : "bg-red-500"
+        }`}
+      />
+      <div>
+        <div className="font-medium text-gray-900">
+          {label}{" "}
+          <span className="text-xs text-gray-400">
+            ({ok ? "configured" : "missing"})
+          </span>
+        </div>
+        <div className="text-xs text-gray-500">{help}</div>
+      </div>
+    </li>
+  );
+}
+
+function FlashBanner({
+  kind,
+  children,
+}: {
+  kind: "green" | "amber" | "red";
+  children: React.ReactNode;
+}) {
+  const cls =
+    kind === "green"
+      ? "border-green-300 bg-green-50 text-green-900"
+      : kind === "amber"
+        ? "border-amber-300 bg-amber-50 text-amber-900"
+        : "border-red-300 bg-red-50 text-red-900";
+  return (
+    <div
+      role="status"
+      className={`mt-6 rounded-lg border px-4 py-3 text-sm ${cls}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function describeError(code: string): string {
+  switch (code) {
+    case "no_oauth_secret":
+      return "TAY_OAUTH_SECRET is missing. Set a 64-character hex string in your Vercel env, redeploy, and try again.";
+    case "no_google_client_id":
+      return "GOOGLE_OAUTH_CLIENT_ID is missing. Create an OAuth client in Google Cloud and set both ID and secret in Vercel env.";
+    case "no_site_url":
+      return "NEXT_PUBLIC_SITE_URL is missing. Set it to your Vercel deployment URL.";
+    case "consent_declined":
+      return "Gmail consent was declined or cancelled.";
+    case "missing_code":
+      return "Google did not return an authorization code.";
+    case "state_mismatch":
+      return "CSRF state mismatch — the connect link may have been tampered with. Try again.";
+    case "server_misconfigured":
+      return "Server is missing OAuth env vars. Check Settings → Integration status.";
+    case "connect_failed":
+      return "Could not exchange the authorization code with Google. Try again, or check that your OAuth client is configured correctly.";
+    case "disconnect_failed":
+      return "Could not disconnect Gmail. Try again.";
+    default:
+      return `Error: ${code}`;
+  }
 }
