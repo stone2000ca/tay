@@ -15,6 +15,7 @@ import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
 import { hasReadScope } from "@/lib/oauth/google";
 import { getReplySettings } from "@/lib/reply/settings";
+import { getSiteUrl } from "@/lib/site-url";
 import { disconnectGmailAction, setAutoReplyAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -30,7 +31,8 @@ export default async function SettingsPage({
   }>;
 }) {
   const params = await searchParams;
-  const oauth = hasSupabaseEnv() && hasOAuthSecret() ? await getGoogleOAuth() : null;
+  const oauthSecretOk = await hasOAuthSecret();
+  const oauth = hasSupabaseEnv() && oauthSecretOk ? await getGoogleOAuth() : null;
   const readScopeOk = oauth ? hasReadScope(oauth.scope) : false;
   const replySettings = await getReplySettings();
 
@@ -151,6 +153,18 @@ export default async function SettingsPage({
         </Link>
       </Section>
 
+      <Section title="Secrets (v1.1.1)">
+        <p className="text-sm text-gray-600">
+          Manage your BYO LLM key + view derived-secret status. Rotation banner included.
+        </p>
+        <Link
+          href="/settings/secrets"
+          className="mt-3 inline-block rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Manage secrets →
+        </Link>
+      </Section>
+
       <Section title="Trust tiers (v1.0)">
         <p className="text-sm text-gray-600">
           Per-capability auto-promotion state. tier_0 keeps humans in the
@@ -168,9 +182,9 @@ export default async function SettingsPage({
       <Section title="Integration status">
         <ul className="space-y-2 text-sm">
           <StatusRow
-            ok={hasOAuthSecret()}
-            label="TAY_OAUTH_SECRET"
-            help="32-byte hex string (64 chars). Encrypts OAuth tokens at rest."
+            ok={oauthSecretOk}
+            label="OAuth crypto secret"
+            help="Derived from SUPABASE_SERVICE_ROLE_KEY (v1.1.1) or falls back to TAY_OAUTH_SECRET. Encrypts OAuth tokens at rest."
           />
           <StatusRow
             ok={hasSupabaseEnv()}
@@ -192,19 +206,54 @@ export default async function SettingsPage({
             label="GOOGLE_OAUTH_CLIENT_SECRET"
             help="From the same Google Cloud OAuth client as the ID."
           />
-          <StatusRow
-            ok={Boolean(process.env.NEXT_PUBLIC_SITE_URL)}
-            label="NEXT_PUBLIC_SITE_URL"
-            help="Used to build the OAuth redirect URI."
+          <InfoRow
+            label="Site URL"
+            value={getSiteUrl()}
+            help="Auto-detected via NEXT_PUBLIC_SITE_URL, then VERCEL_PROJECT_PRODUCTION_URL, then VERCEL_URL, then localhost. Override NEXT_PUBLIC_SITE_URL only if you're on a custom domain."
           />
-          <StatusRow
+          <InfoRow
+            label="Cron secret"
+            value={
+              process.env.CRON_SECRET
+                ? "Vercel-managed (auto-set on deploy)"
+                : "missing — set CRON_SECRET in your env if you're not on Vercel"
+            }
+            help="Used by Vercel Cron to call /api/cron/poll-gmail. Vercel auto-sets this for any project with a vercel.json cron config."
             ok={Boolean(process.env.CRON_SECRET)}
-            label="CRON_SECRET"
-            help="Required for /api/cron/poll-gmail. Vercel Cron sets the Authorization header automatically."
           />
         </ul>
       </Section>
     </main>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  help,
+  ok = true,
+}: {
+  label: string;
+  value: string;
+  help: string;
+  ok?: boolean;
+}) {
+  return (
+    <li className="flex items-start gap-3">
+      <span
+        aria-label={ok ? "configured" : "missing"}
+        className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${
+          ok ? "bg-green-500" : "bg-amber-500"
+        }`}
+      />
+      <div>
+        <div className="font-medium text-gray-900">
+          {label}{" "}
+          <span className="text-xs text-gray-500">{value}</span>
+        </div>
+        <div className="text-xs text-gray-500">{help}</div>
+      </div>
+    </li>
   );
 }
 
@@ -279,7 +328,7 @@ function FlashBanner({
 function describeError(code: string): string {
   switch (code) {
     case "no_oauth_secret":
-      return "TAY_OAUTH_SECRET is missing. Set a 64-character hex string in your Vercel env, redeploy, and try again.";
+      return "OAuth crypto secret unreachable. Configure SUPABASE_SERVICE_ROLE_KEY (or set the legacy TAY_OAUTH_SECRET fallback) and redeploy.";
     case "no_google_client_id":
       return "GOOGLE_OAUTH_CLIENT_ID is missing. Create an OAuth client in Google Cloud and set both ID and secret in Vercel env.";
     case "no_site_url":

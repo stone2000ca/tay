@@ -4,6 +4,7 @@ import { getAppConfig } from "@/lib/app-config";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { getRubric } from "@/lib/voice/calibrate";
 import { getDraftCount } from "@/lib/draft/persist";
+import { getLlmKeyMetadata } from "@/lib/secrets/llm-key";
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -32,12 +33,18 @@ export default async function HomePage() {
     redirect("/setup");
   }
 
-  // Voice calibration is wizard step 2. If the user has an app_config row
-  // but no voice_calibration row, push them to /setup/voice. getRubric is
-  // a soft-fail READ — null could mean "not calibrated" or "Supabase
-  // unavailable"; either way we'd rather show the calibration page than
-  // a half-configured dashboard. The page itself surfaces any real DB
-  // errors when the user submits.
+  // v1.1.1: LLM key is wizard step 2. If app_config exists but no LLM
+  // key is stored, push to /setup/llm-key before voice calibration.
+  // getLlmKeyMetadata is a cheap soft-fail READ.
+  const llmKey = await getLlmKeyMetadata();
+  if (!llmKey) {
+    redirect("/setup/llm-key");
+  }
+
+  // Voice calibration is wizard step 3. If LLM key exists but no rubric,
+  // push to /setup/voice. getRubric is a soft-fail READ — null could
+  // mean "not calibrated" or "Supabase unavailable"; either way we'd
+  // rather show the calibration page than a half-configured dashboard.
   const rubric = await getRubric();
   if (!rubric) {
     redirect("/setup/voice");
@@ -87,7 +94,7 @@ export default async function HomePage() {
         </section>
 
         <p className="mt-10 text-center text-xs text-gray-400">
-          v0.4 — drafter v1 (OpenRouter + voice rubric)
+          v1.1.1 — secrets foundation + multi-provider LLM keys
         </p>
       </div>
     </main>

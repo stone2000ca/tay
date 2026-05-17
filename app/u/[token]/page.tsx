@@ -64,12 +64,12 @@ async function processUnsubscribe(token: string): Promise<Outcome> {
   // ensureSchema is a no-op when Supabase isn't wired (returns skipped).
   await ensureSchema();
 
-  // Verify the token. Throws ONLY if TAY_OAUTH_SECRET is missing — we
-  // catch and render "invalid" rather than leaking the misconfig to
-  // the recipient.
-  let verified: ReturnType<typeof verifyUnsubscribeToken>;
+  // Verify the token. Throws ONLY if the unsubscribe secret is
+  // unreachable — we catch and render "invalid" rather than leaking the
+  // misconfig to the recipient.
+  let verified: Awaited<ReturnType<typeof verifyUnsubscribeToken>>;
   try {
-    verified = verifyUnsubscribeToken(token);
+    verified = await verifyUnsubscribeToken(token);
   } catch {
     return "invalid";
   }

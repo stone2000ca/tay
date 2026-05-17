@@ -16,16 +16,11 @@
 //   - Malformed model output (bad JSON, missing keys, sanity-cap
 //     violations) returns ok: false too.
 
-import { getLlmClient, MODELS } from "../llm";
+import { chatComplete, getLlmClient, getModel } from "../llm";
 import { getRubric } from "../voice/calibrate";
 import type { VoiceRubric } from "../voice/rubric-schema";
 import { buildDraftMessages, type ProspectInputs } from "./prompt";
 import { withDisclosure } from "./disclosure";
-import {
-  AuthenticationError,
-  RateLimitError,
-  APIConnectionError,
-} from "openai";
 
 // Sanity bounds — these aren't user-facing limits, they're "the LLM did
 // something obviously wrong" trips. The system prompt asks for ≤80-char
@@ -63,13 +58,23 @@ export async function generateDraft(args: {
     rubric = fetched;
   }
 
-  const model = args.model ?? MODELS.quality;
+  // v1.1.1 cold-start guard: bail with friendly error if the user hasn't
+  // completed the LLM-key wizard step yet. The wizard sets the stored key
+  // via lib/secrets/llm-key.ts; until then every LLM caller returns this
+  // error rather than crashing.
+  const probe = await getLlmClient(args.apiKey);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      error:
+        "LLM not configured. Complete the setup wizard (/setup/llm-key) before drafting.",
+    };
+  }
+  const model = args.model ?? getModel("quality", probe.provider);
   const messages = buildDraftMessages({ rubric, prospect: args.prospect });
 
-  let raw: string | null = null;
-  try {
-    const client = getLlmClient(args.apiKey);
-    const response = await client.chat.completions.create({
+  const completion = await chatComplete(
+    {
       model,
       temperature: 0.7,
       response_format: { type: "json_object" },
@@ -77,12 +82,13 @@ export async function generateDraft(args: {
         { role: "system", content: messages.system },
         { role: "user", content: messages.user },
       ],
-    });
-    raw = response.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    return { ok: false, error: mapSdkError(err) };
+    },
+    args.apiKey,
+  );
+  if (!completion.ok) {
+    return { ok: false, error: completion.error };
   }
-
+  const raw = completion.content;
   if (!raw || raw.trim().length === 0) {
     return { ok: false, error: "Drafter returned an empty response." };
   }
@@ -102,6 +108,9 @@ export async function generateDraft(args: {
     };
   }
 
+  const body = await withDisclosure(draft.body, {
+    recipientEmail: realRecipient(args.prospect.email),
+  });
   return {
     ok: true,
     draft: {
@@ -110,10 +119,8 @@ export async function generateDraft(args: {
       // include a per-recipient unsubscribe link. Falls back to the
       // constant "Reply STOP" footer when no real email (e.g. the v0.4
       // /draft flow's synthesized `.invalid` placeholders — which can't
-      // be sent anyway) or when TAY_OAUTH_SECRET is missing.
-      body: withDisclosure(draft.body, {
-        recipientEmail: realRecipient(args.prospect.email),
-      }),
+      // be sent anyway) or when the unsubscribe secret is unreachable.
+      body,
     },
     modelUsed: model,
     rubricUsed: rubric,
@@ -150,27 +157,4 @@ function stripJsonFences(raw: string): string {
       .trim();
   }
   return trimmed;
-}
-
-/**
- * Map SDK error classes to friendly user-facing strings. NEVER return raw
- * SDK error text — it can include account ids, request ids, key fragments.
- * Same convention as validateLlmKey in lib/llm.ts.
- */
-function mapSdkError(err: unknown): string {
-  if (err instanceof AuthenticationError) {
-    return "OpenRouter rejected the API key. Re-check OPENROUTER_API_KEY.";
-  }
-  if (err instanceof RateLimitError) {
-    return "Rate limited by OpenRouter. Wait a moment and try again.";
-  }
-  if (err instanceof APIConnectionError) {
-    return "Network error talking to OpenRouter. Check your connection and retry.";
-  }
-  // Log to server for debugging but return generic message to caller.
-  console.warn(
-    "[draft] LLM call failed:",
-    err instanceof Error ? err.message : String(err),
-  );
-  return "Could not reach the drafter right now. Please try again.";
 }

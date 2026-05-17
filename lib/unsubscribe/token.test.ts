@@ -1,19 +1,31 @@
-// Tests for lib/unsubscribe/token.ts.
+// Tests for lib/unsubscribe/token.ts (v1.1.1 async).
+//
+// The unsubscribe HMAC secret is now derived from `getInstanceSecret(
+// "unsubscribe")`. For these tests we force the env-var fallback path
+// (set TAY_OAUTH_SECRET, clear SUPABASE_SERVICE_ROLE_KEY) so no DB hit
+// is required. The HKDF derive path against a real DB is covered by
+// lib/secrets/derive.test.ts integration-style.
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
 const TEST_SECRET = "a".repeat(64);
 
 let originalSecret: string | undefined;
+let originalServiceRole: string | undefined;
 
 beforeEach(() => {
   originalSecret = process.env.TAY_OAUTH_SECRET;
+  originalServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.TAY_OAUTH_SECRET = TEST_SECRET;
 });
 
 afterEach(() => {
   if (originalSecret === undefined) delete process.env.TAY_OAUTH_SECRET;
   else process.env.TAY_OAUTH_SECRET = originalSecret;
+  if (originalServiceRole === undefined)
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRole;
 });
 
 describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
@@ -21,15 +33,15 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
     const { generateUnsubscribeToken, verifyUnsubscribeToken } = await import(
       "./token"
     );
-    const token = generateUnsubscribeToken("alice@example.com");
-    const out = verifyUnsubscribeToken(token);
+    const token = await generateUnsubscribeToken("alice@example.com");
+    const out = await verifyUnsubscribeToken(token);
     expect(out.ok).toBe(true);
     if (out.ok) expect(out.email).toBe("alice@example.com");
   });
 
   test("token has two base64url segments separated by '.'", async () => {
     const { generateUnsubscribeToken } = await import("./token");
-    const token = generateUnsubscribeToken("alice@example.com");
+    const token = await generateUnsubscribeToken("alice@example.com");
     const parts = token.split(".");
     expect(parts).toHaveLength(2);
     // base64url alphabet: A-Z a-z 0-9 - _
@@ -42,8 +54,8 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
       "./token"
     );
     // TTL of -1 days = already expired
-    const token = generateUnsubscribeToken("alice@example.com", -1);
-    const out = verifyUnsubscribeToken(token);
+    const token = await generateUnsubscribeToken("alice@example.com", -1);
+    const out = await verifyUnsubscribeToken(token);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe("expired");
   });
@@ -52,17 +64,14 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
     const { generateUnsubscribeToken, verifyUnsubscribeToken } = await import(
       "./token"
     );
-    const token = generateUnsubscribeToken("alice@example.com");
+    const token = await generateUnsubscribeToken("alice@example.com");
     const [payload, sig] = token.split(".");
-    // Flip a char in the MIDDLE of the signature. (Flipping the last
-    // char of an unpadded base64url string can be a no-op if the byte
-    // only uses the high bits of that char position.)
     const midIdx = Math.floor(sig.length / 2);
     const orig = sig[midIdx];
     const swap = orig === "A" ? "B" : "A";
     const flipped = sig.slice(0, midIdx) + swap + sig.slice(midIdx + 1);
     const tampered = `${payload}.${flipped}`;
-    const out = verifyUnsubscribeToken(tampered);
+    const out = await verifyUnsubscribeToken(tampered);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe("bad_signature");
   });
@@ -71,10 +80,8 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
     const { generateUnsubscribeToken, verifyUnsubscribeToken } = await import(
       "./token"
     );
-    const token = generateUnsubscribeToken("alice@example.com");
+    const token = await generateUnsubscribeToken("alice@example.com");
     const [, sig] = token.split(".");
-    // Craft a payload-replacement using attacker-chosen email but the
-    // original signature.
     const fakePayload = Buffer.from(
       JSON.stringify({ email: "victim@example.com", exp: 9999999999, kind: "unsubscribe" }),
       "utf8",
@@ -83,14 +90,14 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
       .replace(/\+/g, "-")
       .replace(/\//g, "_")
       .replace(/=+$/, "");
-    const out = verifyUnsubscribeToken(`${fakePayload}.${sig}`);
+    const out = await verifyUnsubscribeToken(`${fakePayload}.${sig}`);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe("bad_signature");
   });
 
   test("malformed token (no dot) is rejected with 'malformed'", async () => {
     const { verifyUnsubscribeToken } = await import("./token");
-    expect(verifyUnsubscribeToken("not-a-token")).toEqual({
+    expect(await verifyUnsubscribeToken("not-a-token")).toEqual({
       ok: false,
       reason: "malformed",
     });
@@ -98,7 +105,7 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
 
   test("empty token is rejected with 'malformed'", async () => {
     const { verifyUnsubscribeToken } = await import("./token");
-    expect(verifyUnsubscribeToken("")).toEqual({
+    expect(await verifyUnsubscribeToken("")).toEqual({
       ok: false,
       reason: "malformed",
     });
@@ -108,35 +115,25 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
     const { generateUnsubscribeToken, verifyUnsubscribeToken } = await import(
       "./token"
     );
-    const token = generateUnsubscribeToken("alice@example.com");
+    const token = await generateUnsubscribeToken("alice@example.com");
     process.env.TAY_OAUTH_SECRET = "b".repeat(64);
-    const out = verifyUnsubscribeToken(token);
+    const out = await verifyUnsubscribeToken(token);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe("bad_signature");
   });
 
   test("generateUnsubscribeToken throws on empty email", async () => {
     const { generateUnsubscribeToken } = await import("./token");
-    expect(() => generateUnsubscribeToken("")).toThrow(/email/);
+    await expect(generateUnsubscribeToken("")).rejects.toThrow(/email/);
   });
 
   test("generateUnsubscribeToken throws when secret missing", async () => {
     delete process.env.TAY_OAUTH_SECRET;
     const { generateUnsubscribeToken } = await import("./token");
-    expect(() => generateUnsubscribeToken("a@b.co")).toThrow(/TAY_OAUTH_SECRET/);
-  });
-
-  test("generateUnsubscribeToken throws on malformed secret", async () => {
-    process.env.TAY_OAUTH_SECRET = "not-hex";
-    const { generateUnsubscribeToken } = await import("./token");
-    expect(() => generateUnsubscribeToken("a@b.co")).toThrow(/malformed/);
+    await expect(generateUnsubscribeToken("a@b.co")).rejects.toThrow();
   });
 
   test("token with a non-unsubscribe kind is rejected with 'bad_kind'", async () => {
-    // Mint a payload signed with the same secret but with kind="password_reset".
-    // Signature passes; the kind check is what catches it. Defense in depth
-    // against reusing the same HMAC secret for different token kinds in the
-    // future without explicit per-kind discrimination.
     const { createHmac } = await import("node:crypto");
     const { verifyUnsubscribeToken } = await import("./token");
     const payload = {
@@ -157,19 +154,17 @@ describe("generateUnsubscribeToken + verifyUnsubscribeToken", () => {
       .replace(/\//g, "_")
       .replace(/=+$/, "");
     const token = `${payloadB64}.${sig}`;
-    const out = verifyUnsubscribeToken(token);
+    const out = await verifyUnsubscribeToken(token);
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.reason).toBe("bad_kind");
   });
 
   test("verifyUnsubscribeToken throws when secret missing (route catches it)", async () => {
-    // generate first (with secret set), then drop the secret to simulate
-    // deploy-time misconfig at verify time.
     const { generateUnsubscribeToken, verifyUnsubscribeToken } = await import(
       "./token"
     );
-    const token = generateUnsubscribeToken("a@b.co");
+    const token = await generateUnsubscribeToken("a@b.co");
     delete process.env.TAY_OAUTH_SECRET;
-    expect(() => verifyUnsubscribeToken(token)).toThrow(/TAY_OAUTH_SECRET/);
+    await expect(verifyUnsubscribeToken(token)).rejects.toThrow();
   });
 });

@@ -2,15 +2,18 @@
 //
 // v0.4: constant disclosure footer.
 // v0.8: per-recipient unsubscribe link injected when we know the recipient
-//       AND the TAY_OAUTH_SECRET is configured (needed to sign the
-//       unsubscribe token). Older drafts that landed before v0.8 still
-//       carry the constant "Reply STOP" footer — that's by design.
+//       AND the unsubscribe HMAC secret is reachable. Older drafts that
+//       landed before v0.8 still carry the constant "Reply STOP" footer
+//       — that's by design.
+// v1.1.1: site URL comes from getSiteUrl() (which falls through Vercel's
+//       auto-set env vars when NEXT_PUBLIC_SITE_URL is unset).
 //
 // EVERY new draft body MUST run through withDisclosure(). The drafter
 // (lib/draft/generate.ts) calls it; the orchestrator does not double-call
 // (idempotent via the substring check).
 
 import { generateUnsubscribeToken } from "../unsubscribe/token";
+import { getSiteUrl } from "../site-url";
 
 export const AI_DISCLOSURE_FOOTER =
   "\n\n— Written with AI assistance. Reply STOP to opt out.";
@@ -20,9 +23,9 @@ const DISCLOSURE_MARKER = "Written with AI assistance";
 /**
  * Append the AI disclosure footer to a draft body.
  *
- * If `opts.recipientEmail` is provided AND `TAY_OAUTH_SECRET` is set,
- * the footer includes a per-recipient unsubscribe link of the form
- * `${NEXT_PUBLIC_SITE_URL}/u/<token>`. If either is missing, we fall
+ * If `opts.recipientEmail` is provided AND the HMAC secret + site URL
+ * can be resolved, the footer includes a per-recipient unsubscribe link
+ * of the form `${siteUrl}/u/<token>`. If either is unavailable, we fall
  * back to the constant "Reply STOP" footer. Either footer satisfies
  * Tay gate C.
  *
@@ -32,34 +35,36 @@ const DISCLOSURE_MARKER = "Written with AI assistance";
  * old v0.4 draft re-displayed through withDisclosure won't suddenly
  * pick up an unsubscribe link — the body it stored to disk is what
  * was sent.
+ *
+ * NOW ASYNC: generateUnsubscribeToken became async in v1.1.1 (secret
+ * may go through the derive path which hits the DB).
  */
-export function withDisclosure(
+export async function withDisclosure(
   body: string,
   opts?: { recipientEmail?: string },
-): string {
+): Promise<string> {
   if (body.includes(DISCLOSURE_MARKER)) return body;
 
-  const footer = buildFooter(opts?.recipientEmail);
+  const footer = await buildFooter(opts?.recipientEmail);
   return body.trimEnd() + footer;
 }
 
-function buildFooter(recipientEmail: string | undefined): string {
+async function buildFooter(recipientEmail: string | undefined): Promise<string> {
   if (!recipientEmail) return AI_DISCLOSURE_FOOTER;
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
-  if (!siteUrl) return AI_DISCLOSURE_FOOTER;
+  const siteUrl = getSiteUrl();
+  // getSiteUrl always returns a non-empty string; we still guard for the
+  // dev-fallback localhost case where shipping the link to a recipient
+  // wouldn't be useful. If the user is running against localhost, fall
+  // back to the constant footer.
+  if (siteUrl.startsWith("http://localhost")) return AI_DISCLOSURE_FOOTER;
   let token: string;
   try {
-    token = generateUnsubscribeToken(recipientEmail);
+    token = await generateUnsubscribeToken(recipientEmail);
   } catch (err) {
-    // TAY_OAUTH_SECRET missing or malformed — fall back. We never want
-    // a missing-secret to break drafting. The send path will still be
+    // Unsubscribe secret unreachable — fall back. We never want a
+    // missing-secret to break drafting. The send path will still be
     // blocked upstream (the orchestrator and OAuth flow both require
     // the same secret), but at minimum the user can preview the draft.
-    //
-    // v0.9 addition: warn so operators see the misconfiguration. Without
-    // this, the only visible signal is "no link in the footer" — easy to
-    // miss in a green-on-green deployment. Never log the recipient (Tay
-    // logging rule).
     console.warn(
       "[disclosure] token generation failed:",
       err instanceof Error ? err.message : "unknown",

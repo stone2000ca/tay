@@ -1,29 +1,31 @@
-// HMAC-signed unsubscribe tokens — Tay v0.8 (gate H — input/output integrity).
+// HMAC-signed unsubscribe tokens — Tay v0.8 → v1.1.1 (gate H — input
+// integrity).
 //
 // Format:
 //   base64url(payload).base64url(signature)
 //   where payload = JSON({ email, exp, kind: "unsubscribe" })
-//         signature = HMAC-SHA256(TAY_OAUTH_SECRET, payload_b64url)
+//         signature = HMAC-SHA256(derived-unsubscribe-secret, payload_b64url)
 //
-// SECRET REUSE: we use TAY_OAUTH_SECRET (introduced in v0.7 for AES
-// token encryption) rather than introducing a new env var. Two reasons:
-//   1. Operators already manage it. One fewer thing to forget.
-//   2. The secret has the right length / hex format for HMAC use.
-// Trade-off documented: if the secret leaks, BOTH stored OAuth tokens
-// AND outstanding unsubscribe links become forgeable. The mitigation is
-// the same in both cases: rotate TAY_OAUTH_SECRET, which invalidates
-// outstanding tokens AND requires re-consent on the OAuth side.
+// v1.1.1 SECRET CHANGE: secret is now derived per-purpose via
+// getInstanceSecret("unsubscribe"), not the shared TAY_OAUTH_SECRET env
+// var. Per-purpose HKDF `info` strings keep the unsubscribe secret
+// cryptographically independent of the OAuth-AES secret, so a compromised
+// HMAC verifier doesn't help forge OAuth tokens.
 //
 // DEFAULT TTL: 90 days. Long enough that a recipient who reads an email
 // weeks later can still click; short enough that a leaked link from
 // years ago doesn't unsubscribe someone today.
 //
-// READ-VS-WRITE error contract: these are PURE functions. generate
-// throws if TAY_OAUTH_SECRET missing. verify NEVER throws (the
-// unsubscribe route renders a friendly "expired or invalid" message
-// for any rejection) — returns a discriminated union { ok, ... }.
+// READ-VS-WRITE error contract:
+//   - generateUnsubscribeToken: PURE-ish (async because secret may go to
+//     DB). Throws if the secret can't be derived.
+//   - verifyUnsubscribeToken: same — async; throws ONLY on the secret-
+//     missing path (the unsubscribe route catches and shows a friendly
+//     "expired or invalid" message). All other failure modes return
+//     a discriminated-union `{ ok: false, reason }`.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { getInstanceSecret } from "../secrets/derive";
 
 const SECRET_REGEX = /^[0-9a-fA-F]{64}$/;
 const DEFAULT_TTL_DAYS = 90;
@@ -35,16 +37,18 @@ type Payload = {
   kind: typeof KIND;
 };
 
-function loadKey(): Buffer {
-  const secret = process.env.TAY_OAUTH_SECRET;
-  if (!secret) {
+async function loadKey(): Promise<Buffer> {
+  let secret: string;
+  try {
+    secret = await getInstanceSecret("unsubscribe");
+  } catch (err) {
     throw new Error(
-      "TAY_OAUTH_SECRET missing. Cannot generate or verify unsubscribe tokens. Set a 64-character hex string in your Vercel env.",
+      `Unsubscribe secret unreachable: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
   if (!SECRET_REGEX.test(secret)) {
     throw new Error(
-      "TAY_OAUTH_SECRET malformed. Must be exactly 64 hex characters (32 bytes).",
+      "Unsubscribe secret malformed (expected 64 hex characters).",
     );
   }
   return Buffer.from(secret, "hex");
@@ -69,17 +73,17 @@ function base64urlDecode(s: string): Buffer {
 /**
  * Mint a token that proves "this recipient asked to unsubscribe".
  *
- * Throws if TAY_OAUTH_SECRET is missing or malformed.
+ * Throws if the unsubscribe secret can't be derived.
  */
-export function generateUnsubscribeToken(
+export async function generateUnsubscribeToken(
   email: string,
   ttlDaysOpt?: number,
-): string {
+): Promise<string> {
   const normalized = (email ?? "").trim();
   if (!normalized) {
     throw new Error("generateUnsubscribeToken: email must be non-empty.");
   }
-  const key = loadKey();
+  const key = await loadKey();
   const ttlDays = ttlDaysOpt ?? DEFAULT_TTL_DAYS;
   const nowSec = Math.floor(Date.now() / 1000);
   const exp = nowSec + ttlDays * 24 * 60 * 60;
@@ -101,11 +105,12 @@ export function generateUnsubscribeToken(
  * Otherwise returns { ok: false, reason } with a stable code. Never
  * throws on invalid input — only the secret-missing path throws.
  */
-export function verifyUnsubscribeToken(
+export async function verifyUnsubscribeToken(
   token: string,
-):
+): Promise<
   | { ok: true; email: string }
-  | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "bad_kind" } {
+  | { ok: false; reason: "malformed" | "bad_signature" | "expired" | "bad_kind" }
+> {
   if (typeof token !== "string" || token.length === 0) {
     return { ok: false, reason: "malformed" };
   }
@@ -120,7 +125,7 @@ export function verifyUnsubscribeToken(
   // here is correct behaviour — the unsubscribe route catches it and
   // surfaces a friendly error to the recipient (no token-secret
   // disclosure).
-  const key = loadKey();
+  const key = await loadKey();
   const expectedSig = createHmac("sha256", key).update(payloadB64).digest();
 
   let providedSig: Buffer;

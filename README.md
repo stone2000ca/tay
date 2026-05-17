@@ -2,15 +2,15 @@
 
 Tay finds prospects, writes them in your voice, and books meetings — running on your own Vercel + Supabase. No SaaS account. No shared data. No per-seat fees.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/stone2000ca/tay&env=OPENROUTER_API_KEY,NEXT_PUBLIC_APP_NAME&envDescription=Your%20OpenRouter%20API%20key%20and%20a%20display%20name%20for%20your%20Tay&envLink=https://github.com/stone2000ca/tay/blob/main/README.md%23env-vars)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/stone2000ca/tay)
 
 ## What you'll need
 
-- An [OpenRouter API key](https://openrouter.ai/keys) — one key for any model (Claude, GPT, Gemini, Llama, etc.). Tay uses the model you pick to draft, judge, and research (~$20/month for moderate use on a mid-tier model)
+- An LLM API key — bring your own from [Anthropic](https://console.anthropic.com/settings/keys), [OpenAI](https://platform.openai.com/api-keys), or [OpenRouter](https://openrouter.ai/keys). The wizard auto-detects the provider; you paste the key into the in-app setup, not your env vars.
 - A free [Vercel](https://vercel.com/signup) account — hosts your Tay instance
 - A free [Supabase](https://supabase.com/) account — stores your prospects, drafts, and audit log
-- A [Google Cloud OAuth client](https://console.cloud.google.com/apis/credentials) — "Web application" type, with `${NEXT_PUBLIC_SITE_URL}/api/auth/google/callback` as an authorized redirect URI; scope `gmail.send` (send only, no read)
-- 15 minutes for first-time setup
+- A [Google Cloud OAuth client](https://console.cloud.google.com/apis/credentials) — "Web application" type, with `${SITE_URL}/api/auth/google/callback` as an authorized redirect URI; scopes `gmail.send` + `gmail.readonly`
+- 10 minutes for first-time setup
 
 ## Install in 3 steps
 
@@ -24,9 +24,15 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v1.0 — production-ready (post-discovery; pre-customer)
+## Status: v1.1.1 — secrets foundation for 10-minute non-tech install
 
-This is the v0.x ship gate. After v1.0, Tay is feature-complete for the v0.x cycle. Future work is gated on explicit user direction (the `/tay-build` orchestrator surfaces "awaiting user direction" on the next invocation). Roadmap in [PLAN.md](./PLAN.md).
+The first milestone after the v1.0 SHIP GATE. v1.1.1 ships the secrets foundation that lets a non-technical user install Tay without touching a terminal:
+
+- **Derived per-purpose secrets** — `TAY_OAUTH_SECRET` is gone from your env. The OAuth-token AES key and the unsubscribe HMAC are derived via HKDF-SHA256(`SUPABASE_SERVICE_ROLE_KEY`, `instance_secrets.salt`, per-purpose `info`) on every request. The salt is minted automatically on first cold start and lives in your own Supabase. (Legacy `TAY_OAUTH_SECRET` is still accepted as a fallback for v0.x installs upgrading in place.) `CRON_SECRET` is NOT derived — Vercel Cron's auth mechanism reads `process.env.CRON_SECRET` directly, and Vercel auto-sets it for any project with a `vercel.json` cron config. Non-Vercel deploys must set it manually like any other env var.
+- **BYO LLM provider** — Tay now supports Anthropic (`sk-ant-…`), OpenAI (`sk-…`), and OpenRouter (`sk-or-…`) via auto-detection from the key prefix. The wizard collects your key in-app, encrypts it (AES-256-GCM via the derived OAuth secret), and stores it in `instance_secrets`. Drafter / judge / reply / voice all use a provider-neutral `chatComplete` adapter.
+- **`VERCEL_URL` auto-detection** — `NEXT_PUBLIC_SITE_URL` is now optional. Tay falls through to `VERCEL_PROJECT_PRODUCTION_URL` and `VERCEL_URL` (both auto-set by Vercel) before defaulting to `http://localhost:3000`. The OAuth callback + unsubscribe links pick up the right host without manual configuration.
+
+v1.0 (still in place) ships JOURNEYS eval suite + trust-tier promotion. Roadmap in [PLAN.md](./PLAN.md).
 
 v1.0 lands three things together:
 
@@ -44,24 +50,24 @@ Runs `vitest run journeys` — the 10 adversarial scenarios + an aggregated summ
 
 `npm test` runs the full unit-test suite AND the JOURNEYS harness (both pick up `*.test.ts`).
 
-## Env vars
+## Env vars (v1.1.1)
 
 | Var | What it's for | Required |
 |---|---|---|
-| `OPENROUTER_API_KEY` | LLM calls for drafting, judging, research — any model OpenRouter supports | yes |
-| `OPENROUTER_MODEL_CHEAP` | Override the default cheap model (default `anthropic/claude-3.5-haiku`) | optional |
-| `OPENROUTER_MODEL_QUALITY` | Override the default quality model (default `anthropic/claude-3.5-sonnet`) | optional |
 | `NEXT_PUBLIC_APP_NAME` | Display name shown in the Tay UI | optional |
 | `NEXT_PUBLIC_SUPABASE_URL` | Auto-set by the Vercel + Supabase Marketplace integration | yes |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Auto-set by the integration | yes |
-| `SUPABASE_SERVICE_ROLE_KEY` | Auto-set by the integration | yes |
-| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID from Google Cloud Console — required for v0.7 send path | yes (v0.7+) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Auto-set by the integration. v1.1.1: used as HKDF IKM for the OAuth/unsubscribe/cron secrets | yes |
+| `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING` | Auto-set by the integration. Used by the migration runner | yes |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID from Google Cloud Console — required for the send path | yes (v0.7+) |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret paired with the ID above | yes (v0.7+) |
-| `TAY_OAUTH_SECRET` | 64 hex chars (32 bytes). Encrypts OAuth tokens at rest. Generate with `openssl rand -hex 32` | yes (v0.7+) |
-| `NEXT_PUBLIC_SITE_URL` | Public URL of your Tay deploy. Used to build the OAuth redirect URI | yes (v0.7+) |
-| `CRON_SECRET` | Bearer token Vercel Cron forwards when triggering `/api/cron/poll-gmail`. Generate with `openssl rand -hex 32`. Without it, the cron route returns 401 and Tay never polls for replies | yes (v0.9+) |
+| `NEXT_PUBLIC_SITE_URL` | Public URL of your Tay deploy. v1.1.1: falls back to `VERCEL_PROJECT_PRODUCTION_URL` / `VERCEL_URL` so it's optional on Vercel | optional |
+| `OPENROUTER_MODEL_CHEAP` | Override the default cheap OpenRouter model | optional |
+| `OPENROUTER_MODEL_QUALITY` | Override the default quality OpenRouter model | optional |
+| `TAY_OAUTH_SECRET` | DEPRECATED. v0.x env var; v1.1.1 derives this. Still honored as fallback while you migrate | optional |
+| `CRON_SECRET` | Auto-set by Vercel when a `vercel.json` cron is configured. Non-Vercel deploys must set this manually | auto on Vercel |
 
-For local development, copy [.env.example](./.env.example) to `.env.local` and fill in values.
+For local development, copy [.env.example](./.env.example) to `.env.local`. The LLM API key is collected by the in-app wizard, not env vars.
 
 ## Local dev
 
@@ -69,11 +75,11 @@ For local development, copy [.env.example](./.env.example) to `.env.local` and f
 git clone git@github.com:stone2000ca/tay.git
 cd tay
 npm install
-cp .env.example .env.local   # fill in OPENROUTER_API_KEY at minimum
+cp .env.example .env.local   # Supabase + Google OAuth vars only
 npm run dev
 ```
 
-Then `http://localhost:3000`.
+Then `http://localhost:3000`. The wizard at `/setup` walks you through naming the instance, pasting your LLM key (sk-ant-… / sk-… / sk-or-…), and calibrating voice.
 
 ## License
 

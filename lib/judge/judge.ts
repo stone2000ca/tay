@@ -21,12 +21,7 @@
 //   on normal error paths. Does NOT write to the DB (persist is its own
 //   module). Same convention as generateDraft.
 
-import {
-  AuthenticationError,
-  RateLimitError,
-  APIConnectionError,
-} from "openai";
-import { getLlmClient, MODELS } from "../llm";
+import { chatComplete, getLlmClient, getModel } from "../llm";
 import { getRubric } from "../voice/calibrate";
 import type { VoiceRubric } from "../voice/rubric-schema";
 import { buildJudgeMessages, type Draft, type ProspectInputs } from "./prompt";
@@ -63,17 +58,23 @@ export async function judgeDraft(args: {
     rubric = fetched;
   }
 
-  const model = args.model ?? MODELS.quality;
+  const probe = await getLlmClient(args.apiKey);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      error:
+        "LLM not configured. Complete the setup wizard (/setup/llm-key) before judging.",
+    };
+  }
+  const model = args.model ?? getModel("quality", probe.provider);
   const messages = buildJudgeMessages({
     rubric,
     draft: args.draft,
     prospectInputs: args.prospectInputs,
   });
 
-  let raw: string | null = null;
-  try {
-    const client = getLlmClient(args.apiKey);
-    const response = await client.chat.completions.create({
+  const completion = await chatComplete(
+    {
       model,
       temperature: 0.2,
       response_format: { type: "json_object" },
@@ -81,12 +82,13 @@ export async function judgeDraft(args: {
         { role: "system", content: messages.system },
         { role: "user", content: messages.user },
       ],
-    });
-    raw = response.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    return { ok: false, error: mapSdkError(err) };
+    },
+    args.apiKey,
+  );
+  if (!completion.ok) {
+    return { ok: false, error: completion.error };
   }
-
+  const raw = completion.content;
   if (!raw || raw.trim().length === 0) {
     return { ok: false, error: "Judge returned an empty response." };
   }
@@ -115,26 +117,4 @@ function stripJsonFences(raw: string): string {
       .trim();
   }
   return trimmed;
-}
-
-/**
- * Map SDK error classes to friendly user-facing strings. NEVER return
- * raw SDK error text — it can include account ids, request ids, key
- * fragments. Same convention as generateDraft + validateLlmKey.
- */
-function mapSdkError(err: unknown): string {
-  if (err instanceof AuthenticationError) {
-    return "OpenRouter rejected the API key. Re-check OPENROUTER_API_KEY.";
-  }
-  if (err instanceof RateLimitError) {
-    return "Rate limited by OpenRouter. Wait a moment and try again.";
-  }
-  if (err instanceof APIConnectionError) {
-    return "Network error talking to OpenRouter. Check your connection and retry.";
-  }
-  console.warn(
-    "[judge] LLM call failed:",
-    err instanceof Error ? err.message : String(err),
-  );
-  return "Could not reach the judge right now. Please try again.";
 }

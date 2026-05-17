@@ -56,10 +56,11 @@ export default async function QueuePage({
 
   await ensureSchema();
 
-  const [oauth, rubric, rows] = await Promise.all([
+  const [oauth, rubric, rows, oauthSecretOk] = await Promise.all([
     getGoogleOAuth(),
     getRubric(),
     loadQueueRows(),
+    hasOAuthSecret(),
   ]);
 
   return (
@@ -85,14 +86,13 @@ export default async function QueuePage({
         </div>
       )}
 
-      {!hasOAuthSecret() && (
+      {!oauthSecretOk && (
         <Banner kind="red">
-          <strong>TAY_OAUTH_SECRET missing.</strong>{" "}
-          Set a 64-character hex string in your Vercel env, redeploy, and
-          reconnect Gmail before sending.
+          <strong>OAuth crypto secret unreachable.</strong>{" "}
+          Configure SUPABASE_SERVICE_ROLE_KEY (or the legacy TAY_OAUTH_SECRET fallback), redeploy, and reconnect Gmail before sending.
         </Banner>
       )}
-      {hasOAuthSecret() && !oauth && (
+      {oauthSecretOk && !oauth && (
         <Banner kind="amber">
           <strong>Gmail not connected.</strong>{" "}
           <Link href="/settings" className="underline">
@@ -121,7 +121,7 @@ export default async function QueuePage({
             .
           </div>
         ) : (
-          <QueueTable rows={rows} canSend={!!oauth && !!rubric && hasOAuthSecret()} />
+          <QueueTable rows={rows} canSend={!!oauth && !!rubric && oauthSecretOk} />
         )}
       </section>
     </main>

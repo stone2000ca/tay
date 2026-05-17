@@ -52,8 +52,9 @@ export default async function RepliesPage() {
 
   await ensureSchema();
 
+  const oauthSecretOk = await hasOAuthSecret();
   const [oauth, rubric, settings, rows] = await Promise.all([
-    hasOAuthSecret() ? getGoogleOAuth() : Promise.resolve(null),
+    oauthSecretOk ? getGoogleOAuth() : Promise.resolve(null),
     getRubric(),
     getReplySettings(),
     loadReplyRows(),
@@ -82,14 +83,13 @@ export default async function RepliesPage() {
         </Link>
       </header>
 
-      {!hasOAuthSecret() && (
+      {!oauthSecretOk && (
         <Banner kind="red">
-          <strong>TAY_OAUTH_SECRET missing.</strong>{" "}
-          Set a 64-character hex string in your Vercel env, redeploy, and
-          reconnect Gmail.
+          <strong>OAuth crypto secret unreachable.</strong>{" "}
+          Configure SUPABASE_SERVICE_ROLE_KEY (or the legacy TAY_OAUTH_SECRET fallback), redeploy, and reconnect Gmail.
         </Banner>
       )}
-      {hasOAuthSecret() && !oauth && (
+      {oauthSecretOk && !oauth && (
         <Banner kind="amber">
           <strong>Gmail not connected.</strong>{" "}
           <Link href="/settings" className="underline">

@@ -235,6 +235,20 @@ BEGIN
   END IF;
 END$$;
 `,
+  "0011_instance_secrets.sql": `
+-- v1.1.1: instance secrets — single-row table holding the HKDF salt and
+-- the user's BYO LLM provider key (encrypted via the derived oauth secret).
+CREATE TABLE IF NOT EXISTS instance_secrets (
+  lock_col integer NOT NULL DEFAULT 1 UNIQUE,
+  salt bytea NOT NULL,
+  llm_provider text CHECK (llm_provider IN ('anthropic','openai','openrouter')),
+  llm_key_ciphertext text,
+  llm_key_fingerprint text,
+  llm_key_set_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -391,6 +405,12 @@ function sentinelFor(file: string): Sentinel {
       // block, so re-running when the constraint exists but the table
       // somehow doesn't would still be safe.
       return { kind: "table", table: "trust_tiers" };
+    case "0011_instance_secrets.sql":
+      // 0011 creates the single instance_secrets table. Once the table
+      // exists, the salt-bootstrap path in lib/secrets/derive.ts handles
+      // populating the lone row on first cold start — that's not a
+      // migration concern.
+      return { kind: "table", table: "instance_secrets" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.
