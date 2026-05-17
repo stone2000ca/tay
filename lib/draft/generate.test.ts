@@ -1,32 +1,30 @@
-// Tests for lib/draft/generate.ts.
+// Tests for lib/draft/generate.ts (v1.1.1).
 //
-// Mocks: the openai SDK (so we control the LLM output) and getRubric
-// (so we can exercise both the "rubric passed in" and "rubric fetched
-// from DB" paths). We never hit a network or DB.
+// generateDraft now goes through chatComplete + getLlmClient from
+// lib/llm. We mock those so tests stay focused on drafter behavior
+// (no SDK shape dependencies).
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { VoiceRubric } from "../voice/rubric-schema";
 
-const createMock = vi.fn();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let chatCompleteMock: any;
 const getRubricMock = vi.fn();
 
-// Mock the openai SDK — same shape as in calibrate.test.ts so error
-// classes the SDK exports are recognizable via instanceof checks.
-vi.mock("openai", () => {
-  class FakeOpenAI {
-    chat = { completions: { create: createMock } };
-    constructor(_opts: unknown) {
-      /* noop */
-    }
-  }
-  class AuthenticationError extends Error {}
-  class RateLimitError extends Error {}
-  class APIConnectionError extends Error {}
+vi.mock("../llm", async () => {
+  const actual = await vi.importActual<typeof import("../llm")>("../llm");
   return {
-    default: FakeOpenAI,
-    AuthenticationError,
-    RateLimitError,
-    APIConnectionError,
+    ...actual,
+    getLlmClient: async () => ({
+      ok: true,
+      provider: "openrouter",
+      client: {} as unknown,
+      apiKey: "sk-or-test",
+    }),
+    chatComplete: (...args: unknown[]) => chatCompleteMock(...args),
+    getModel: (tier: "cheap" | "quality") =>
+      tier === "cheap" ? "test/cheap" : "test/quality",
+    MODELS: { cheap: "test/cheap", quality: "test/quality" },
   };
 });
 
@@ -51,14 +49,30 @@ const validDraft = {
     "want to compare notes on outbound for teams at your stage?\n\nJames",
 };
 
-function llmResponseWith(content: string) {
-  return { choices: [{ message: { content } }] };
+function llmJson(obj: unknown) {
+  chatCompleteMock.mockResolvedValueOnce({
+    ok: true,
+    content: JSON.stringify(obj),
+    provider: "openrouter",
+    modelUsed: "test/quality",
+  });
+}
+
+function llmRaw(raw: string) {
+  chatCompleteMock.mockResolvedValueOnce({
+    ok: true,
+    content: raw,
+    provider: "openrouter",
+    modelUsed: "test/quality",
+  });
 }
 
 beforeEach(() => {
-  createMock.mockReset();
+  chatCompleteMock = vi.fn();
   getRubricMock.mockReset();
   process.env.OPENROUTER_API_KEY = "sk-or-test";
+  process.env.TAY_OAUTH_SECRET = "a".repeat(64);
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 });
 
 afterEach(() => {
@@ -67,7 +81,7 @@ afterEach(() => {
 
 describe("generateDraft", () => {
   test("returns draft with disclosure footer appended on success", async () => {
-    createMock.mockResolvedValueOnce(llmResponseWith(JSON.stringify(validDraft)));
+    llmJson(validDraft);
     const { generateDraft } = await import("./generate");
 
     const result = await generateDraft({
@@ -84,11 +98,10 @@ describe("generateDraft", () => {
       expect(result.rubricUsed).toEqual(validRubric);
     }
 
-    // Verify the LLM call shape — json_object response_format, temperature.
-    const callArg = createMock.mock.calls[0][0];
+    // Verify chatComplete call shape.
+    const callArg = chatCompleteMock.mock.calls[0][0];
     expect(callArg.response_format).toEqual({ type: "json_object" });
     expect(callArg.temperature).toBe(0.7);
-    // Verify rubric leaked into system prompt (Tay gate D).
     const systemMessage = callArg.messages.find(
       (m: { role: string }) => m.role === "system",
     )?.content as string;
@@ -102,9 +115,7 @@ describe("generateDraft", () => {
       body:
         "Hi Jordan — quick thought on your launch. Want to chat?\n\n— Written with AI assistance. Reply STOP to opt out.",
     };
-    createMock.mockResolvedValueOnce(
-      llmResponseWith(JSON.stringify(draftWithFooter)),
-    );
+    llmJson(draftWithFooter);
     const { generateDraft } = await import("./generate");
 
     const result = await generateDraft({
@@ -114,130 +125,86 @@ describe("generateDraft", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      // The "Written with AI assistance" substring should appear ONCE.
       const matches = result.draft.body.match(/Written with AI assistance/g);
       expect(matches).toHaveLength(1);
     }
   });
 
   test("returns error on malformed JSON", async () => {
-    createMock.mockResolvedValueOnce(llmResponseWith("this is not json {"));
+    llmRaw("this is not json {");
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
       rubric: validRubric,
     });
-
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toMatch(/malformed/i);
-    }
+    if (!result.ok) expect(result.error).toMatch(/malformed/i);
   });
 
   test("returns error when JSON is missing required keys", async () => {
-    createMock.mockResolvedValueOnce(
-      llmResponseWith(JSON.stringify({ subject: "Only subject, no body" })),
-    );
+    llmJson({ subject: "Only subject, no body" });
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
       rubric: validRubric,
     });
-
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toMatch(/invalid|shape/i);
-    }
+    if (!result.ok) expect(result.error).toMatch(/invalid|shape/i);
   });
 
   test("returns error when subject is too long (sanity cap)", async () => {
-    createMock.mockResolvedValueOnce(
-      llmResponseWith(
-        JSON.stringify({
-          subject: "x".repeat(500),
-          body: "Hi there.",
-        }),
-      ),
-    );
+    llmJson({ subject: "x".repeat(500), body: "Hi there." });
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
       rubric: validRubric,
     });
-
     expect(result.ok).toBe(false);
   });
 
-  test("maps AuthenticationError to friendly message (no SDK leak)", async () => {
-    const openai = await import("openai");
-    // Mocked AuthenticationError above is a plain Error subclass; the real
-    // SDK constructor takes 4 args, but our mock accepts just a message.
-    // Cast to bypass the real-SDK type signature.
-    const Ctor = openai.AuthenticationError as unknown as new (
-      msg: string,
-    ) => Error;
-    const err = new Ctor("401 invalid_api_key acct_secret_12345");
-    createMock.mockRejectedValueOnce(err);
+  test("forwards chatComplete error to caller (no SDK leak)", async () => {
+    chatCompleteMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Invalid API key. Double-check the key and try again.",
+    });
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
       rubric: validRubric,
     });
-
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toMatch(/api key|OpenRouter/i);
-      // The raw SDK string with account fragment must NOT leak.
-      expect(result.error).not.toContain("acct_secret_12345");
-    }
+    if (!result.ok) expect(result.error).toMatch(/api key/i);
   });
 
   test("errors when getRubric returns null and no rubric arg is passed", async () => {
     getRubricMock.mockResolvedValueOnce(null);
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
     });
-
     expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error).toMatch(/calibrate|voice/i);
-    }
-    // No LLM call should have been made.
-    expect(createMock).not.toHaveBeenCalled();
+    if (!result.ok) expect(result.error).toMatch(/calibrate|voice/i);
+    expect(chatCompleteMock).not.toHaveBeenCalled();
   });
 
   test("uses fetched rubric when no rubric arg is passed and getRubric returns one", async () => {
     getRubricMock.mockResolvedValueOnce(validRubric);
-    createMock.mockResolvedValueOnce(llmResponseWith(JSON.stringify(validDraft)));
+    llmJson(validDraft);
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
     });
-
     expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.rubricUsed).toEqual(validRubric);
-    }
+    if (result.ok) expect(result.rubricUsed).toEqual(validRubric);
   });
 
   test("strips ```json fences if the model wraps output", async () => {
-    createMock.mockResolvedValueOnce(
-      llmResponseWith("```json\n" + JSON.stringify(validDraft) + "\n```"),
-    );
+    llmRaw("```json\n" + JSON.stringify(validDraft) + "\n```");
     const { generateDraft } = await import("./generate");
-
     const result = await generateDraft({
       prospect: { full_name: "Jordan", company: "Acme" },
       rubric: validRubric,
     });
-
     expect(result.ok).toBe(true);
   });
 });

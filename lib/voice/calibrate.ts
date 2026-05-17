@@ -21,7 +21,7 @@ import {
   type VoiceRubric,
   RUBRIC_LIMITS,
 } from "./rubric-schema";
-import { getLlmClient, MODELS } from "../llm";
+import { chatComplete, getLlmClient, getModel } from "../llm";
 import {
   getSupabaseServerClient,
   hasSupabaseEnv,
@@ -89,34 +89,34 @@ export async function extractVoiceRubric(
     }
   }
 
-  const model = opts.model ?? MODELS.quality;
+  const probe = await getLlmClient();
+  if (!probe.ok) {
+    return {
+      ok: false,
+      error:
+        "LLM not configured. Complete the setup wizard (/setup/llm-key) before calibrating.",
+    };
+  }
+  const model = opts.model ?? getModel("quality", probe.provider);
   const userMessage = buildUserMessage(samples);
 
-  let raw: string | null = null;
-  try {
-    const client = getLlmClient();
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 800,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: userMessage },
-      ],
-    });
-    raw = response.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    // Don't leak raw SDK error text — same convention as validateLlmKey.
-    const message = err instanceof Error ? err.message : String(err);
-    // Surface a short, generic message but keep enough for debugging in
-    // server logs.
-    console.warn("[calibrate] LLM call failed:", message);
+  const completion = await chatComplete({
+    model,
+    max_tokens: 800,
+    response_format: { type: "json_object" },
+    messages: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: userMessage },
+    ],
+  });
+  if (!completion.ok) {
+    console.warn("[calibrate] LLM call failed:", completion.error);
     return {
       ok: false,
       error: "Could not reach the LLM right now. Please try again.",
     };
   }
-
+  const raw = completion.content;
   if (!raw || raw.trim().length === 0) {
     return { ok: false, error: "Extractor returned an empty response." };
   }

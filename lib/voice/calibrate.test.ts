@@ -8,22 +8,52 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const createMock = vi.fn();
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let chatCompleteMock: any;
 
-vi.mock("openai", () => {
-  class FakeOpenAI {
-    chat = { completions: { create: createMock } };
-    constructor(_opts: unknown) {
-      /* noop */
-    }
-  }
+vi.mock("../llm", async () => {
+  const actual = await vi.importActual<typeof import("../llm")>("../llm");
   return {
-    default: FakeOpenAI,
-    AuthenticationError: class extends Error {},
-    RateLimitError: class extends Error {},
-    APIConnectionError: class extends Error {},
+    ...actual,
+    getLlmClient: async () => ({
+      ok: true,
+      provider: "openrouter",
+      client: {} as unknown,
+      apiKey: "sk-or-test",
+    }),
+    chatComplete: (...args: unknown[]) => chatCompleteMock(...args),
+    getModel: (tier: "cheap" | "quality") =>
+      tier === "cheap" ? "test/cheap" : "test/quality",
+    MODELS: { cheap: "test/cheap", quality: "test/quality" },
   };
 });
+
+// Back-compat shim — tests still reference `createMock`. Wire it to the
+// chatComplete mock so existing assertions keep working with the new
+// response shape ({ ok, content, ... }).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const createMock: any = {
+  mockResolvedValueOnce(payload: { choices?: Array<{ message?: { content?: string } }> }) {
+    const content = payload?.choices?.[0]?.message?.content ?? "";
+    chatCompleteMock.mockResolvedValueOnce({
+      ok: true,
+      content,
+      provider: "openrouter",
+      modelUsed: "test/quality",
+    });
+    return createMock;
+  },
+  mockRejectedValueOnce(_err: unknown) {
+    chatCompleteMock.mockResolvedValueOnce({
+      ok: false,
+      error: "Could not reach the LLM right now. Please try again.",
+    });
+    return createMock;
+  },
+  get mock() {
+    return chatCompleteMock.mock;
+  },
+};
 
 const validRubric = {
   opener_style: "personalized first-name + observation about their team",
@@ -40,7 +70,7 @@ function llmResponseWith(content: string) {
 }
 
 beforeEach(() => {
-  createMock.mockReset();
+  chatCompleteMock = vi.fn();
   process.env.OPENROUTER_API_KEY = "sk-or-test";
 });
 
@@ -149,7 +179,7 @@ describe("extractVoiceRubric", () => {
     const { extractVoiceRubric } = await import("./calibrate");
     const result = await extractVoiceRubric(samples.slice(0, 2));
     expect(result.ok).toBe(false);
-    expect(createMock).not.toHaveBeenCalled();
+    expect(chatCompleteMock).not.toHaveBeenCalled();
   });
 
   test("rejects too-many samples", async () => {
@@ -157,7 +187,7 @@ describe("extractVoiceRubric", () => {
     const tooMany = Array.from({ length: 15 }, () => samples[0]);
     const result = await extractVoiceRubric(tooMany);
     expect(result.ok).toBe(false);
-    expect(createMock).not.toHaveBeenCalled();
+    expect(chatCompleteMock).not.toHaveBeenCalled();
   });
 
   test("rejects samples that are too short", async () => {
@@ -167,7 +197,7 @@ describe("extractVoiceRubric", () => {
     if (!result.ok) {
       expect(result.error).toMatch(/too short/i);
     }
-    expect(createMock).not.toHaveBeenCalled();
+    expect(chatCompleteMock).not.toHaveBeenCalled();
   });
 
   test("strips ```json fences if the model wraps output", async () => {

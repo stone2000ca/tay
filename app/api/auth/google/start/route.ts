@@ -16,6 +16,7 @@ import { randomBytes } from "node:crypto";
 import { redirect } from "next/navigation";
 import { buildAuthUrl } from "@/lib/oauth/google";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
+import { getSiteUrl } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,12 +25,16 @@ const STATE_COOKIE = "tay-oauth-state";
 const STATE_TTL_SECONDS = 600; // 10 minutes
 
 export async function GET() {
-  if (!hasOAuthSecret()) {
+  if (!(await hasOAuthSecret())) {
     redirect("/settings?error=no_oauth_secret");
   }
 
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+  // v1.1.1: use getSiteUrl() so VERCEL_URL / VERCEL_PROJECT_PRODUCTION_URL
+  // are honored as fallbacks. Empty siteUrl returns "http://localhost:3000"
+  // (dev fallback), which Google rejects in production — surface a clearer
+  // error than "redirect_uri_mismatch" by failing early when no URL is set.
+  const siteUrl = getSiteUrl();
   if (!clientId) {
     redirect("/settings?error=no_google_client_id");
   }

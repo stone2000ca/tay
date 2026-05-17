@@ -25,12 +25,7 @@
 // READ-VS-WRITE error contract: generateReplyDraft is an LLM CALL
 // followed by a WRITE. Returns a discriminated union (never throws).
 
-import {
-  AuthenticationError,
-  RateLimitError,
-  APIConnectionError,
-} from "openai";
-import { getLlmClient, MODELS } from "../llm";
+import { chatComplete, getLlmClient, getModel } from "../llm";
 import type { VoiceRubric } from "../voice/rubric-schema";
 import { withDisclosure } from "../draft/disclosure";
 import { judgeDraft } from "../judge/judge";
@@ -76,7 +71,16 @@ export async function generateReplyDraft(args: {
     };
   }
   const rubric = args.rubric;
-  const model = args.model ?? MODELS.quality;
+
+  const probe = await getLlmClient(args.apiKey);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      error:
+        "LLM not configured. Complete the setup wizard (/setup/llm-key) before drafting replies.",
+    };
+  }
+  const model = args.model ?? getModel("quality", probe.provider);
 
   const replyBody = args.reply.body.slice(0, MAX_REPLY_CHARS);
   const origSubject = args.originalDraft.subject.slice(0, 200);
@@ -91,10 +95,8 @@ export async function generateReplyDraft(args: {
     origBody,
   });
 
-  let raw: string | null = null;
-  try {
-    const client = getLlmClient(args.apiKey);
-    const response = await client.chat.completions.create({
+  const completion = await chatComplete(
+    {
       model,
       temperature: 0.6,
       response_format: { type: "json_object" },
@@ -102,12 +104,13 @@ export async function generateReplyDraft(args: {
         { role: "system", content: messages.system },
         { role: "user", content: messages.user },
       ],
-    });
-    raw = response.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    return { ok: false, error: mapSdkError(err) };
+    },
+    args.apiKey,
+  );
+  if (!completion.ok) {
+    return { ok: false, error: completion.error };
   }
-
+  const raw = completion.content;
   if (!raw || raw.trim().length === 0) {
     return { ok: false, error: "Reply drafter returned an empty response." };
   }
@@ -128,7 +131,7 @@ export async function generateReplyDraft(args: {
   // possible; falls back to the constant footer if the secret/site URL
   // is missing). The reply still needs disclosure even though we're
   // mid-thread; recipients may have forgotten the original disclaimer.
-  const bodyWithDisclosure = withDisclosure(validated.body, {
+  const bodyWithDisclosure = await withDisclosure(validated.body, {
     recipientEmail: realRecipient(args.reply.from),
   });
 
@@ -342,21 +345,4 @@ function neuter(s: string): string {
   return s
     .replaceAll("</untrusted_source>", "[/untrusted_source]")
     .replace(/<untrusted_source\b/g, "[untrusted_source");
-}
-
-function mapSdkError(err: unknown): string {
-  if (err instanceof AuthenticationError) {
-    return "OpenRouter rejected the API key. Re-check OPENROUTER_API_KEY.";
-  }
-  if (err instanceof RateLimitError) {
-    return "Rate limited by OpenRouter. Wait a moment and try again.";
-  }
-  if (err instanceof APIConnectionError) {
-    return "Network error talking to OpenRouter. Check your connection and retry.";
-  }
-  console.warn(
-    "[reply/draft] LLM call failed:",
-    err instanceof Error ? err.message : String(err),
-  );
-  return "Could not reach the reply drafter right now. Please try again.";
 }

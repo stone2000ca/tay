@@ -80,14 +80,14 @@ export async function saveGoogleOAuth(args: {
       "Supabase not configured. Link your project via the Vercel Marketplace before connecting Gmail.",
     );
   }
-  if (!hasOAuthSecret()) {
+  if (!(await hasOAuthSecret())) {
     throw new Error(
-      "TAY_OAUTH_SECRET missing or malformed. Set a 64-character hex string in your Vercel env before connecting Gmail.",
+      "OAuth crypto secret unreachable. Configure SUPABASE_SERVICE_ROLE_KEY (or set the legacy TAY_OAUTH_SECRET fallback) before connecting Gmail.",
     );
   }
   const supabase = getSupabaseServerClient();
-  const refresh_token_encrypted = encryptToken(args.refreshToken);
-  const access_token_encrypted = encryptToken(args.accessToken);
+  const refresh_token_encrypted = await encryptToken(args.refreshToken);
+  const access_token_encrypted = await encryptToken(args.accessToken);
   const access_token_expires_at = new Date(
     Date.now() + args.expiresIn * 1000,
   ).toISOString();
@@ -120,7 +120,7 @@ export async function saveGoogleOAuth(args: {
  */
 export async function getGoogleOAuth(): Promise<GoogleOAuthRecord | null> {
   if (!hasSupabaseEnv()) return null;
-  if (!hasOAuthSecret()) return null;
+  if (!(await hasOAuthSecret())) return null;
   try {
     const supabase = getSupabaseServerClient();
     const { data, error } = await supabase
@@ -142,8 +142,8 @@ export async function getGoogleOAuth(): Promise<GoogleOAuthRecord | null> {
     let refreshToken: string;
     let accessToken: string;
     try {
-      refreshToken = decryptToken(refresh);
-      accessToken = access ? decryptToken(access) : "";
+      refreshToken = await decryptToken(refresh);
+      accessToken = access ? await decryptToken(access) : "";
     } catch (err) {
       // Don't log the ciphertext; do log the failure mode.
       console.warn(
@@ -239,18 +239,18 @@ export async function ensureFreshAccessToken(): Promise<string> {
   });
 
   // Persist the new access token + expiry. Refresh token stays the same.
-  if (!hasSupabaseEnv() || !hasOAuthSecret()) {
+  if (!hasSupabaseEnv() || !(await hasOAuthSecret())) {
     // Shouldn't happen — we got here via getGoogleOAuth which passed
     // both checks — but be defensive.
     throw new Error(
-      "Cannot persist refreshed token: Supabase or TAY_OAUTH_SECRET unavailable.",
+      "Cannot persist refreshed token: Supabase or OAuth secret unavailable.",
     );
   }
   const supabase = getSupabaseServerClient();
   const upd = await supabase
     .from(TABLE)
     .update({
-      access_token_encrypted: encryptToken(refreshed.accessToken),
+      access_token_encrypted: await encryptToken(refreshed.accessToken),
       access_token_expires_at: new Date(
         Date.now() + refreshed.expiresIn * 1000,
       ).toISOString(),

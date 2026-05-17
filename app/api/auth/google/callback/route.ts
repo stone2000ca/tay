@@ -17,6 +17,7 @@ import { ensureSchema } from "@/lib/supabase/migrate";
 import { exchangeCodeForTokens, getProfileEmail } from "@/lib/oauth/google";
 import { saveGoogleOAuth } from "@/lib/oauth/persist";
 import { appendAudit } from "@/lib/audit/append";
+import { getSiteUrl } from "@/lib/site-url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -58,13 +59,18 @@ export async function GET(request: Request) {
 
   const clientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
   const clientSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
-  if (!clientId || !clientSecret || !siteUrl) {
+  // v1.1.1: site URL falls through to VERCEL_URL / VERCEL_PROJECT_PRODUCTION_URL
+  // when NEXT_PUBLIC_SITE_URL isn't explicitly set. getSiteUrl always returns
+  // a non-empty string — localhost fallback is fine for dev but Google will
+  // reject it in production (the redirect_uri must match the OAuth client's
+  // authorized list). Surface the mismatch upstream via the catch below.
+  const siteUrl = getSiteUrl();
+  if (!clientId || !clientSecret) {
     console.warn("[oauth] callback missing env vars");
     redirect("/settings?error=server_misconfigured");
   }
 
-  const redirectUri = `${siteUrl!.replace(/\/$/, "")}/api/auth/google/callback`;
+  const redirectUri = `${siteUrl.replace(/\/$/, "")}/api/auth/google/callback`;
 
   await ensureSchema();
 

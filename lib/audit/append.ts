@@ -60,7 +60,11 @@ export type AuditAction =
   | "reply.auto_reply_toggled"
   // v1.0 — trust-tier promotion/demotion events (Tay gate I).
   | "trust.tier_changed"
-  | "trust.manual_override_set";
+  | "trust.manual_override_set"
+  // v1.1.1 — instance-secrets lifecycle (Tay gate F).
+  | "secrets.salt_bootstrapped"
+  | "secrets.llm_key_set"
+  | "secrets.llm_key_rotated";
 
 export type AuditEvent = {
   action: AuditAction;

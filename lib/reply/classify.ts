@@ -31,12 +31,7 @@
 //   throws on normal error paths. Does NOT write to the DB. Same
 //   convention as generateDraft + judgeDraft.
 
-import {
-  AuthenticationError,
-  RateLimitError,
-  APIConnectionError,
-} from "openai";
-import { getLlmClient, MODELS } from "../llm";
+import { chatComplete, getLlmClient, getModel } from "../llm";
 import type { VoiceRubric } from "../voice/rubric-schema";
 
 export type ReplyIntent =
@@ -83,7 +78,14 @@ export async function classifyReply(args: {
   model?: string;
   apiKey?: string;
 }): Promise<ClassifyResult> {
-  const model = args.model ?? MODELS.cheap;
+  const probe = await getLlmClient(args.apiKey);
+  if (!probe.ok) {
+    return {
+      ok: false,
+      error: "llm_not_configured",
+    };
+  }
+  const model = args.model ?? getModel("cheap", probe.provider);
 
   const stripped = stripQuotedAndSignature(args.reply.body);
   const truncated = stripped.slice(0, MAX_REPLY_CHARS);
@@ -99,10 +101,8 @@ export async function classifyReply(args: {
     origBody: origBody,
   });
 
-  let raw: string | null = null;
-  try {
-    const client = getLlmClient(args.apiKey);
-    const response = await client.chat.completions.create({
+  const completion = await chatComplete(
+    {
       model,
       temperature: 0.1,
       response_format: { type: "json_object" },
@@ -110,12 +110,13 @@ export async function classifyReply(args: {
         { role: "system", content: messages.system },
         { role: "user", content: messages.user },
       ],
-    });
-    raw = response.choices?.[0]?.message?.content ?? null;
-  } catch (err) {
-    return { ok: false, error: mapSdkError(err) };
+    },
+    args.apiKey,
+  );
+  if (!completion.ok) {
+    return { ok: false, error: completion.error };
   }
-
+  const raw = completion.content;
   if (!raw || raw.trim().length === 0) {
     return { ok: false, error: "Reply classifier returned an empty response." };
   }
@@ -307,21 +308,4 @@ function stripJsonFences(raw: string): string {
       .trim();
   }
   return trimmed;
-}
-
-function mapSdkError(err: unknown): string {
-  if (err instanceof AuthenticationError) {
-    return "OpenRouter rejected the API key. Re-check OPENROUTER_API_KEY.";
-  }
-  if (err instanceof RateLimitError) {
-    return "Rate limited by OpenRouter. Wait a moment and try again.";
-  }
-  if (err instanceof APIConnectionError) {
-    return "Network error talking to OpenRouter. Check your connection and retry.";
-  }
-  console.warn(
-    "[reply/classify] LLM call failed:",
-    err instanceof Error ? err.message : String(err),
-  );
-  return "Could not reach the reply classifier right now. Please try again.";
 }

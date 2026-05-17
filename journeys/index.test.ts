@@ -26,6 +26,30 @@ import {
 import { mockController } from "./mocks/controller";
 
 vi.mock("openai", () => makeOpenAiMock());
+// v1.1.1: stored-LLM-key path. The cold-start guard in drafter / judge /
+// reply now calls getLlmKey() — mock it to always return a fake stored
+// key so journeys exercise the LLM-call code paths, not the
+// "configure your key first" branch.
+vi.mock("@/lib/secrets/llm-key", () => ({
+  getLlmKey: async () => ({ provider: "openrouter", plaintext: "sk-or-journeys-test" }),
+  getLlmKeyMetadata: async () => ({
+    provider: "openrouter",
+    fingerprint: "deadbeef",
+    setAt: new Date().toISOString(),
+  }),
+  setLlmKey: async () => {},
+  computeFingerprint: () => "deadbeef",
+}));
+vi.mock("../lib/secrets/llm-key", () => ({
+  getLlmKey: async () => ({ provider: "openrouter", plaintext: "sk-or-journeys-test" }),
+  getLlmKeyMetadata: async () => ({
+    provider: "openrouter",
+    fingerprint: "deadbeef",
+    setAt: new Date().toISOString(),
+  }),
+  setLlmKey: async () => {},
+  computeFingerprint: () => "deadbeef",
+}));
 vi.mock("@/lib/supabase/server", () => makeSupabaseMock());
 vi.mock("../lib/supabase/server", () => makeSupabaseMock());
 vi.mock("@/lib/audit/append", () => makeAuditMock());

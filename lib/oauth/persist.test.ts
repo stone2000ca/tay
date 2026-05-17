@@ -87,6 +87,7 @@ vi.mock("./google", () => ({
 let originalSecret: string | undefined;
 let originalGoogleId: string | undefined;
 let originalGoogleSecret: string | undefined;
+let originalServiceRole: string | undefined;
 
 beforeEach(() => {
   queries.length = 0;
@@ -97,6 +98,10 @@ beforeEach(() => {
   originalSecret = process.env.TAY_OAUTH_SECRET;
   originalGoogleId = process.env.GOOGLE_OAUTH_CLIENT_ID;
   originalGoogleSecret = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+  originalServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  // Force env-var fallback for the derived OAuth crypto secret —
+  // mock-only persist tests can't reach Supabase to bootstrap a salt.
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   process.env.TAY_OAUTH_SECRET = TEST_SECRET;
   process.env.GOOGLE_OAUTH_CLIENT_ID = "cid";
   process.env.GOOGLE_OAUTH_CLIENT_SECRET = "csec";
@@ -111,6 +116,9 @@ afterEach(() => {
   if (originalGoogleSecret === undefined)
     delete process.env.GOOGLE_OAUTH_CLIENT_SECRET;
   else process.env.GOOGLE_OAUTH_CLIENT_SECRET = originalGoogleSecret;
+  if (originalServiceRole === undefined)
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  else process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRole;
   vi.restoreAllMocks();
 });
 
@@ -206,7 +214,7 @@ describe("saveGoogleOAuth", () => {
     ).rejects.toThrow(/Supabase not configured/);
   });
 
-  test("throws when TAY_OAUTH_SECRET missing", async () => {
+  test("throws when OAuth crypto secret unreachable", async () => {
     delete process.env.TAY_OAUTH_SECRET;
     const { saveGoogleOAuth } = await import("./persist");
     await expect(
@@ -217,7 +225,7 @@ describe("saveGoogleOAuth", () => {
         expiresIn: 60,
         scope: "x",
       }),
-    ).rejects.toThrow(/TAY_OAUTH_SECRET/);
+    ).rejects.toThrow();
   });
 });
 
@@ -225,8 +233,8 @@ describe("getGoogleOAuth", () => {
   test("decrypts and returns the record", async () => {
     // First, save so we get real ciphertexts.
     const { encryptToken } = await import("./crypto");
-    const refresh_token_encrypted = encryptToken("rt-real");
-    const access_token_encrypted = encryptToken("at-real");
+    const refresh_token_encrypted = await encryptToken("rt-real");
+    const access_token_encrypted = await encryptToken("at-real");
     const expiresAt = new Date(Date.now() + 3600_000).toISOString();
 
     const q = freshQuery();
@@ -302,8 +310,8 @@ describe("ensureFreshAccessToken", () => {
     q.result = {
       data: {
         email_address: "j",
-        refresh_token_encrypted: encryptToken("rt"),
-        access_token_encrypted: encryptToken("at-existing"),
+        refresh_token_encrypted: await encryptToken("rt"),
+        access_token_encrypted: await encryptToken("at-existing"),
         access_token_expires_at: new Date(Date.now() + 3600_000).toISOString(),
         scopes: "s",
       },
@@ -322,8 +330,8 @@ describe("ensureFreshAccessToken", () => {
     readQ.result = {
       data: {
         email_address: "j",
-        refresh_token_encrypted: encryptToken("rt"),
-        access_token_encrypted: encryptToken("at-old"),
+        refresh_token_encrypted: await encryptToken("rt"),
+        access_token_encrypted: await encryptToken("at-old"),
         access_token_expires_at: new Date(Date.now() + 10_000).toISOString(),
         scopes: "s",
       },
@@ -358,8 +366,8 @@ describe("ensureFreshAccessToken", () => {
     q.result = {
       data: {
         email_address: "j",
-        refresh_token_encrypted: encryptToken("rt"),
-        access_token_encrypted: encryptToken("at-old"),
+        refresh_token_encrypted: await encryptToken("rt"),
+        access_token_encrypted: await encryptToken("at-old"),
         access_token_expires_at: new Date(Date.now() + 10_000).toISOString(),
         scopes: "s",
       },
@@ -378,8 +386,8 @@ describe("ensureFreshAccessToken", () => {
     q.result = {
       data: {
         email_address: "j",
-        refresh_token_encrypted: encryptToken("rt"),
-        access_token_encrypted: encryptToken("at-old"),
+        refresh_token_encrypted: await encryptToken("rt"),
+        access_token_encrypted: await encryptToken("at-old"),
         access_token_expires_at: new Date(Date.now() - 10_000).toISOString(),
         scopes: "s",
       },

@@ -30,7 +30,8 @@ export default async function SettingsPage({
   }>;
 }) {
   const params = await searchParams;
-  const oauth = hasSupabaseEnv() && hasOAuthSecret() ? await getGoogleOAuth() : null;
+  const oauthSecretOk = await hasOAuthSecret();
+  const oauth = hasSupabaseEnv() && oauthSecretOk ? await getGoogleOAuth() : null;
   const readScopeOk = oauth ? hasReadScope(oauth.scope) : false;
   const replySettings = await getReplySettings();
 
@@ -151,6 +152,18 @@ export default async function SettingsPage({
         </Link>
       </Section>
 
+      <Section title="Secrets (v1.1.1)">
+        <p className="text-sm text-gray-600">
+          Manage your BYO LLM key + view derived-secret status. Rotation banner included.
+        </p>
+        <Link
+          href="/settings/secrets"
+          className="mt-3 inline-block rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Manage secrets →
+        </Link>
+      </Section>
+
       <Section title="Trust tiers (v1.0)">
         <p className="text-sm text-gray-600">
           Per-capability auto-promotion state. tier_0 keeps humans in the
@@ -168,9 +181,9 @@ export default async function SettingsPage({
       <Section title="Integration status">
         <ul className="space-y-2 text-sm">
           <StatusRow
-            ok={hasOAuthSecret()}
-            label="TAY_OAUTH_SECRET"
-            help="32-byte hex string (64 chars). Encrypts OAuth tokens at rest."
+            ok={oauthSecretOk}
+            label="OAuth crypto secret"
+            help="Derived from SUPABASE_SERVICE_ROLE_KEY (v1.1.1) or falls back to TAY_OAUTH_SECRET. Encrypts OAuth tokens at rest."
           />
           <StatusRow
             ok={hasSupabaseEnv()}
@@ -279,7 +292,7 @@ function FlashBanner({
 function describeError(code: string): string {
   switch (code) {
     case "no_oauth_secret":
-      return "TAY_OAUTH_SECRET is missing. Set a 64-character hex string in your Vercel env, redeploy, and try again.";
+      return "OAuth crypto secret unreachable. Configure SUPABASE_SERVICE_ROLE_KEY (or set the legacy TAY_OAUTH_SECRET fallback) and redeploy.";
     case "no_google_client_id":
       return "GOOGLE_OAUTH_CLIENT_ID is missing. Create an OAuth client in Google Cloud and set both ID and secret in Vercel env.";
     case "no_site_url":

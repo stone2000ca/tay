@@ -1,4 +1,4 @@
-// App-level OAuth token encryption — Tay v0.7.
+// App-level OAuth token encryption — Tay v0.7 → v1.1.1.
 //
 // Tay rule: NEVER store raw OAuth tokens. The Tay-the-author never sees a
 // byte promise extends to anyone who later gets a snapshot of the user's
@@ -7,41 +7,59 @@
 //
 // Algorithm: AES-256-GCM (authenticated encryption — integrity + secrecy).
 // Output format: base64(iv || ciphertext || authTag). iv is 12 bytes (GCM
-// standard), authTag is 16 bytes. Caller-provided key is `TAY_OAUTH_SECRET`,
-// 64 hex chars (32 bytes) — checked via strict regex.
+// standard), authTag is 16 bytes.
 //
-// v1.0 candidate: swap for Supabase Vault when it's GA. Until then,
-// app-level encryption with a user-managed env-var key is the most
-// portable "tokens are useless without the key" we can build.
+// v1.1.1: key now comes from getInstanceSecret("oauth") — HKDF-derived
+// from SUPABASE_SERVICE_ROLE_KEY + instance_secrets.salt — instead of a
+// user-managed TAY_OAUTH_SECRET env var. The 64-hex output of HKDF
+// matches the prior env-var shape so the AES wiring below is unchanged.
 //
-// READ-VS-WRITE contract: these are PURE functions. encryptToken throws
-// if the secret is missing OR malformed (a write that can't be decrypted
-// is a silent data-loss bug). decryptToken throws if the secret is
-// missing, malformed, OR the ciphertext fails authentication (tampering
-// detection). Callers in lib/oauth/persist.ts are WRITE-throwing.
+// v0.x compatibility: lib/secrets/derive.ts contains an env-var fallback
+// for TAY_OAUTH_SECRET, so existing v0.x installs (with the env var
+// already set) keep working until they're re-deployed against a Supabase
+// project that's wired through the Marketplace.
+//
+// READ-VS-WRITE contract: these are PURE-ish functions (now async because
+// the key fetch may go to the DB). encryptToken throws if the secret is
+// unreachable (a write that can't be decrypted is a silent data-loss
+// bug). decryptToken throws if the secret is unreachable, ciphertext is
+// malformed, OR the auth tag fails (tampering detection).
 
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { getInstanceSecret } from "../secrets/derive";
 
 const ALGO = "aes-256-gcm";
 const IV_LEN = 12; // GCM standard
 const TAG_LEN = 16;
 const SECRET_REGEX = /^[0-9a-fA-F]{64}$/;
 
-export function hasOAuthSecret(): boolean {
-  const secret = process.env.TAY_OAUTH_SECRET;
-  return typeof secret === "string" && SECRET_REGEX.test(secret);
+/**
+ * Cheap probe — "is the OAuth crypto secret reachable?". Async because
+ * the derive path may need to hit the DB to bootstrap the salt.
+ *
+ * Returns false (never throws) so cold-start UIs can branch cleanly.
+ */
+export async function hasOAuthSecret(): Promise<boolean> {
+  try {
+    const secret = await getInstanceSecret("oauth");
+    return SECRET_REGEX.test(secret);
+  } catch {
+    return false;
+  }
 }
 
-function loadKey(): Buffer {
-  const secret = process.env.TAY_OAUTH_SECRET;
-  if (!secret) {
+async function loadKey(): Promise<Buffer> {
+  let secret: string;
+  try {
+    secret = await getInstanceSecret("oauth");
+  } catch (err) {
     throw new Error(
-      "TAY_OAUTH_SECRET missing. Set a 64-character hex string (32 bytes) in your Vercel env before connecting OAuth.",
+      `OAuth secret unreachable: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
   if (!SECRET_REGEX.test(secret)) {
     throw new Error(
-      "TAY_OAUTH_SECRET malformed. Must be exactly 64 hex characters (32 bytes).",
+      "OAuth secret malformed (expected 64 hex characters). This shouldn't happen with the HKDF derive path; check your env-var fallback.",
     );
   }
   return Buffer.from(secret, "hex");
@@ -49,18 +67,18 @@ function loadKey(): Buffer {
 
 /**
  * Encrypt a plaintext token. Output: base64(iv || ciphertext || authTag).
- * Throws if TAY_OAUTH_SECRET is missing or malformed.
+ * Throws if the derived secret is unreachable or malformed.
  *
  * Each call produces a fresh random IV — same plaintext encrypts to a
  * different ciphertext every time. This is the right property for tokens
  * (an attacker can't tell when the user rotated their refresh token by
  * watching ciphertext bytes change).
  */
-export function encryptToken(plaintext: string): string {
+export async function encryptToken(plaintext: string): Promise<string> {
   if (typeof plaintext !== "string" || plaintext.length === 0) {
     throw new Error("encryptToken: plaintext must be a non-empty string.");
   }
-  const key = loadKey();
+  const key = await loadKey();
   const iv = randomBytes(IV_LEN);
   const cipher = createCipheriv(ALGO, key, iv);
   const ciphertext = Buffer.concat([
@@ -73,7 +91,7 @@ export function encryptToken(plaintext: string): string {
 
 /**
  * Decrypt a ciphertext produced by `encryptToken`. Throws if:
- *   - TAY_OAUTH_SECRET is missing or malformed
+ *   - the derived secret is unreachable or malformed
  *   - the input is not valid base64 / too short to contain iv + tag
  *   - the auth tag fails (tampering or wrong key)
  *
@@ -81,11 +99,11 @@ export function encryptToken(plaintext: string): string {
  * token would be passed to Gmail and produce confusing 401s. Better to
  * surface "this row was encrypted under a different key" up the stack.
  */
-export function decryptToken(ciphertextB64: string): string {
+export async function decryptToken(ciphertextB64: string): Promise<string> {
   if (typeof ciphertextB64 !== "string" || ciphertextB64.length === 0) {
     throw new Error("decryptToken: ciphertext must be a non-empty string.");
   }
-  const key = loadKey();
+  const key = await loadKey();
   let raw: Buffer;
   try {
     raw = Buffer.from(ciphertextB64, "base64");
@@ -106,7 +124,7 @@ export function decryptToken(ciphertextB64: string): string {
     );
   } catch {
     throw new Error(
-      "decryptToken: auth tag mismatch (tampered ciphertext or wrong TAY_OAUTH_SECRET).",
+      "decryptToken: auth tag mismatch (tampered ciphertext or rotated secret).",
     );
   }
 }

@@ -1,19 +1,23 @@
-// Tests for lib/oauth/crypto.ts.
+// Tests for lib/oauth/crypto.ts (v1.1.1 async).
 //
-// Use a deterministic test secret. Encryption uses a random IV, so we
-// can't pin the ciphertext byte-for-byte — we test the round-trip
-// invariant + tampering detection.
+// Crypto secret now goes through getInstanceSecret("oauth"); we use the
+// env-var fallback (TAY_OAUTH_SECRET set, SUPABASE_SERVICE_ROLE_KEY
+// cleared) so these tests run without touching the DB. The HKDF derive
+// path is exercised in lib/secrets/derive.test.ts.
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-const TEST_SECRET = "a".repeat(64); // 64 hex chars; valid by regex
+const TEST_SECRET = "a".repeat(64);
 const BAD_SECRET_SHORT = "abcd";
 const BAD_SECRET_NONHEX = "z".repeat(64);
 
 let originalSecret: string | undefined;
+let originalServiceRole: string | undefined;
 
 beforeEach(() => {
   originalSecret = process.env.TAY_OAUTH_SECRET;
+  originalServiceRole = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 });
 
 afterEach(() => {
@@ -22,31 +26,36 @@ afterEach(() => {
   } else {
     process.env.TAY_OAUTH_SECRET = originalSecret;
   }
+  if (originalServiceRole === undefined) {
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  } else {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = originalServiceRole;
+  }
 });
 
 describe("hasOAuthSecret", () => {
-  test("true for 64-char hex", async () => {
+  test("true for 64-char hex via env-var fallback", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { hasOAuthSecret } = await import("./crypto");
-    expect(hasOAuthSecret()).toBe(true);
+    expect(await hasOAuthSecret()).toBe(true);
   });
 
   test("false when missing", async () => {
     delete process.env.TAY_OAUTH_SECRET;
     const { hasOAuthSecret } = await import("./crypto");
-    expect(hasOAuthSecret()).toBe(false);
+    expect(await hasOAuthSecret()).toBe(false);
   });
 
   test("false when too short", async () => {
     process.env.TAY_OAUTH_SECRET = BAD_SECRET_SHORT;
     const { hasOAuthSecret } = await import("./crypto");
-    expect(hasOAuthSecret()).toBe(false);
+    expect(await hasOAuthSecret()).toBe(false);
   });
 
   test("false when contains non-hex characters", async () => {
     process.env.TAY_OAUTH_SECRET = BAD_SECRET_NONHEX;
     const { hasOAuthSecret } = await import("./crypto");
-    expect(hasOAuthSecret()).toBe(false);
+    expect(await hasOAuthSecret()).toBe(false);
   });
 });
 
@@ -55,85 +64,84 @@ describe("encryptToken / decryptToken round-trip", () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken, decryptToken } = await import("./crypto");
     const plaintext = "1//abc-refresh-token";
-    const ct = encryptToken(plaintext);
+    const ct = await encryptToken(plaintext);
     expect(ct).not.toContain(plaintext);
-    expect(decryptToken(ct)).toBe(plaintext);
+    expect(await decryptToken(ct)).toBe(plaintext);
   });
 
   test("round-trips a long token (>200 chars)", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken, decryptToken } = await import("./crypto");
     const plaintext = "x".repeat(2048);
-    const ct = encryptToken(plaintext);
-    expect(decryptToken(ct)).toBe(plaintext);
+    const ct = await encryptToken(plaintext);
+    expect(await decryptToken(ct)).toBe(plaintext);
   });
 
   test("two encryptions of the same plaintext produce different ciphertexts (fresh IV)", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken } = await import("./crypto");
-    const a = encryptToken("identical");
-    const b = encryptToken("identical");
+    const a = await encryptToken("identical");
+    const b = await encryptToken("identical");
     expect(a).not.toBe(b);
   });
 });
 
 describe("encryptToken — error paths", () => {
-  test("throws when TAY_OAUTH_SECRET is missing", async () => {
+  test("throws when the secret is unreachable", async () => {
     delete process.env.TAY_OAUTH_SECRET;
     const { encryptToken } = await import("./crypto");
-    expect(() => encryptToken("x")).toThrow(/TAY_OAUTH_SECRET missing/);
+    await expect(encryptToken("x")).rejects.toThrow();
   });
 
-  test("throws when TAY_OAUTH_SECRET is malformed", async () => {
+  test("throws when fallback secret is malformed", async () => {
     process.env.TAY_OAUTH_SECRET = BAD_SECRET_SHORT;
     const { encryptToken } = await import("./crypto");
-    expect(() => encryptToken("x")).toThrow(/malformed/);
+    await expect(encryptToken("x")).rejects.toThrow();
   });
 
   test("throws when plaintext is empty", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken } = await import("./crypto");
-    expect(() => encryptToken("")).toThrow(/non-empty/);
+    await expect(encryptToken("")).rejects.toThrow(/non-empty/);
   });
 });
 
 describe("decryptToken — error paths", () => {
-  test("throws when TAY_OAUTH_SECRET is missing", async () => {
+  test("throws when the secret becomes unreachable after encrypt", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken } = await import("./crypto");
-    const ct = encryptToken("hi");
+    const ct = await encryptToken("hi");
     delete process.env.TAY_OAUTH_SECRET;
     const { decryptToken } = await import("./crypto");
-    expect(() => decryptToken(ct)).toThrow(/TAY_OAUTH_SECRET missing/);
+    await expect(decryptToken(ct)).rejects.toThrow();
   });
 
   test("throws on tampered ciphertext (auth tag mismatch)", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken, decryptToken } = await import("./crypto");
-    const ct = encryptToken("hello");
-    // Flip the last byte (in the auth tag) — base64 last char tweak.
+    const ct = await encryptToken("hello");
     const tampered = ct.slice(0, -2) + (ct.endsWith("A==") ? "B==" : "A==");
-    expect(() => decryptToken(tampered)).toThrow();
+    await expect(decryptToken(tampered)).rejects.toThrow();
   });
 
   test("throws on ciphertext that is too short", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { decryptToken } = await import("./crypto");
-    expect(() => decryptToken("YWFh")).toThrow(/too short/);
+    await expect(decryptToken("YWFh")).rejects.toThrow(/too short/);
   });
 
   test("throws on empty ciphertext", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { decryptToken } = await import("./crypto");
-    expect(() => decryptToken("")).toThrow(/non-empty/);
+    await expect(decryptToken("")).rejects.toThrow(/non-empty/);
   });
 
   test("throws when decrypted with a different key", async () => {
     process.env.TAY_OAUTH_SECRET = TEST_SECRET;
     const { encryptToken } = await import("./crypto");
-    const ct = encryptToken("secret-data");
+    const ct = await encryptToken("secret-data");
     process.env.TAY_OAUTH_SECRET = "b".repeat(64);
     const { decryptToken } = await import("./crypto");
-    expect(() => decryptToken(ct)).toThrow();
+    await expect(decryptToken(ct)).rejects.toThrow();
   });
 });

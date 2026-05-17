@@ -4,19 +4,23 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { VoiceRubric } from "../voice/rubric-schema";
 
 // -- LLM mock ---------------------------------------------------------
+// v1.1.1: reply/draft uses chatComplete + getLlmClient (discriminated
+// unions). Mock both.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let createMock: any;
+let chatCompleteMock: any;
 vi.mock("../llm", async () => {
   const actual = await vi.importActual<typeof import("../llm")>("../llm");
   return {
     ...actual,
-    getLlmClient: () => ({
-      chat: {
-        completions: {
-          create: (...args: unknown[]) => createMock(...args),
-        },
-      },
+    getLlmClient: async () => ({
+      ok: true,
+      provider: "openrouter",
+      client: {} as unknown,
+      apiKey: "sk-or-test",
     }),
+    chatComplete: (...args: unknown[]) => chatCompleteMock(...args),
+    getModel: (tier: "cheap" | "quality") =>
+      tier === "cheap" ? "test/cheap" : "test/quality",
     MODELS: { cheap: "test/cheap", quality: "test/quality" },
   };
 });
@@ -66,12 +70,14 @@ const rubric: VoiceRubric = {
 };
 
 beforeEach(() => {
-  createMock = vi.fn();
+  chatCompleteMock = vi.fn();
   judgeMock.mockReset();
   queries.length = 0;
   nextQueryIndex = 0;
   fromMock.mockClear();
   process.env.OPENROUTER_API_KEY ??= "sk-or-test";
+  process.env.TAY_OAUTH_SECRET = "a".repeat(64);
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -80,8 +86,11 @@ afterEach(() => {
 });
 
 function mockLlmDraft(d: { subject: string; body: string }) {
-  createMock.mockResolvedValue({
-    choices: [{ message: { content: JSON.stringify(d) } }],
+  chatCompleteMock.mockResolvedValue({
+    ok: true,
+    content: JSON.stringify(d),
+    provider: "openrouter",
+    modelUsed: "test/quality",
   });
 }
 
@@ -194,7 +203,7 @@ describe("generateReplyDraft — defense smoke", () => {
       prospectId: "p1",
       promptInputs: { full_name: "x", company: "y" },
     });
-    const userMsg = createMock.mock.calls[0]?.[0]?.messages?.[1]?.content as string;
+    const userMsg = chatCompleteMock.mock.calls[0]?.[0]?.messages?.[1]?.content as string;
     expect(userMsg).toContain("<untrusted_source");
     expect(userMsg).toContain("[/untrusted_source]");
   });
@@ -214,7 +223,12 @@ describe("generateReplyDraft — defense smoke", () => {
   });
 
   test("LLM malformed JSON → ok:false", async () => {
-    createMock.mockResolvedValue({ choices: [{ message: { content: "not json" } }] });
+    chatCompleteMock.mockResolvedValue({
+      ok: true,
+      content: "not json",
+      provider: "openrouter",
+      modelUsed: "test/quality",
+    });
     const { generateReplyDraft } = await import("./draft");
     const out = await generateReplyDraft({
       reply: { from: "a@b.co", body: "x" },
