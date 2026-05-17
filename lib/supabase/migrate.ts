@@ -73,6 +73,24 @@ CREATE TABLE IF NOT EXISTS voice_calibration (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 `,
+  "0003_drafts.sql": `
+ALTER TABLE prospects
+  ADD COLUMN IF NOT EXISTS notes text;
+
+CREATE TABLE IF NOT EXISTS drafts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  prospect_id uuid NOT NULL REFERENCES prospects(id) ON DELETE CASCADE,
+  subject text NOT NULL,
+  body text NOT NULL,
+  model_used text NOT NULL,
+  rubric_snapshot jsonb NOT NULL,
+  prompt_inputs jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS drafts_prospect_id_created_at_idx
+  ON drafts (prospect_id, created_at DESC);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -117,16 +135,25 @@ async function runMigrationsOnce(): Promise<MigrateResult> {
 
     for (const file of MIGRATION_FILES) {
       // Per-migration idempotence is on the SQL (CREATE IF NOT EXISTS),
-      // but we also pre-check a sentinel table per migration so we skip
-      // the entire SQL apply when it's already been run. Cheaper, and
-      // avoids any unforeseen side-effects of re-running DDL.
-      const sentinel = sentinelTableFor(file);
+      // but we also pre-check a sentinel per migration so we skip the
+      // entire SQL apply when it's already been run. Cheaper, and avoids
+      // any unforeseen side-effects of re-running DDL.
+      const sentinel = sentinelFor(file);
       const existsRes = await client.query<{ exists: boolean }>(
-        `SELECT EXISTS (
-           SELECT 1 FROM information_schema.tables
-           WHERE table_schema = 'public' AND table_name = $1
-         ) AS exists`,
-        [sentinel],
+        sentinel.kind === "table"
+          ? `SELECT EXISTS (
+               SELECT 1 FROM information_schema.tables
+               WHERE table_schema = 'public' AND table_name = $1
+             ) AS exists`
+          : `SELECT EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name = $1
+                 AND column_name = $2
+             ) AS exists`,
+        sentinel.kind === "table"
+          ? [sentinel.table]
+          : [sentinel.table, sentinel.column],
       );
       if (existsRes.rows[0]?.exists) {
         continue;
@@ -167,21 +194,36 @@ async function runMigrationsOnce(): Promise<MigrateResult> {
   }
 }
 
+type Sentinel =
+  | { kind: "table"; table: string }
+  | { kind: "column"; table: string; column: string };
+
 /**
- * Sentinel table for each migration. Picked as a table the migration
- * *creates*, so its presence is sufficient evidence the migration ran.
+ * Sentinel for each migration. Pick evidence that the migration ran:
+ *  - `table`: a table the migration creates (most common).
+ *  - `column`: a column added by ALTER (used when the migration both
+ *    ALTERs and CREATEs — the column is the more specific signal that
+ *    THIS migration ran, vs a future migration that recreates the table).
  * Keep in sync if migration contents change.
  */
-function sentinelTableFor(file: string): string {
+function sentinelFor(file: string): Sentinel {
   switch (file) {
     case "0001_init.sql":
-      return "app_config";
+      return { kind: "table", table: "app_config" };
     case "0002_voice_calibration.sql":
-      return "voice_calibration";
+      return { kind: "table", table: "voice_calibration" };
+    case "0003_drafts.sql":
+      // 0003 both creates `drafts` AND alters `prospects` to add `notes`.
+      // The `notes` column is the strictly-stronger signal: if it exists,
+      // the migration definitely ran (a fresh install without 0003 would
+      // never have it). Checking drafts alone would miss the edge case
+      // where a prior partial-failure left drafts created but the ALTER
+      // unrolled.
+      return { kind: "column", table: "prospects", column: "notes" };
     default:
-      // Unknown file — return an impossible name so the pre-check fails
+      // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.
-      return `__tay_unknown_${file}`;
+      return { kind: "table", table: `__tay_unknown_${file}` };
   }
 }
 
