@@ -13,17 +13,26 @@ import Link from "next/link";
 import { hasSupabaseEnv } from "@/lib/supabase/server";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
-import { disconnectGmailAction } from "./actions";
+import { hasReadScope } from "@/lib/oauth/google";
+import { getReplySettings } from "@/lib/reply/settings";
+import { disconnectGmailAction, setAutoReplyAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ connected?: string; error?: string; disconnected?: string }>;
+  searchParams: Promise<{
+    connected?: string;
+    error?: string;
+    disconnected?: string;
+    auto_reply?: string;
+  }>;
 }) {
   const params = await searchParams;
   const oauth = hasSupabaseEnv() && hasOAuthSecret() ? await getGoogleOAuth() : null;
+  const readScopeOk = oauth ? hasReadScope(oauth.scope) : false;
+  const replySettings = await getReplySettings();
 
   return (
     <main className="mx-auto max-w-3xl px-6 py-12">
@@ -38,6 +47,12 @@ export default async function SettingsPage({
       {params.disconnected && (
         <FlashBanner kind="amber">Gmail disconnected.</FlashBanner>
       )}
+      {params.auto_reply === "on" && (
+        <FlashBanner kind="green">Auto-reply drafting is now ON.</FlashBanner>
+      )}
+      {params.auto_reply === "off" && (
+        <FlashBanner kind="amber">Auto-reply drafting is OFF.</FlashBanner>
+      )}
       {params.error && (
         <FlashBanner kind="red">{describeError(params.error)}</FlashBanner>
       )}
@@ -51,6 +66,18 @@ export default async function SettingsPage({
                 {oauth.emailAddress}
               </span>
             </div>
+            {!readScopeOk && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                <strong>Reconnect Gmail for reply handling.</strong>{" "}
+                Your current OAuth grant is send-only. v0.9 needs the
+                additional <code>gmail.readonly</code> scope to poll for
+                replies.{" "}
+                <a href="/api/auth/google/start" className="underline">
+                  Reconnect now
+                </a>
+                .
+              </div>
+            )}
             <form action={disconnectGmailAction}>
               <button
                 type="submit"
@@ -63,9 +90,10 @@ export default async function SettingsPage({
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
-              Tay needs Gmail send access to deliver drafts. Scope:{" "}
-              <code className="text-xs">gmail.send</code> (send only, no
-              read).
+              Tay needs Gmail send + read access. Scopes:{" "}
+              <code className="text-xs">gmail.send</code> and{" "}
+              <code className="text-xs">gmail.readonly</code> (read used
+              only for inbound-reply polling; v0.9).
             </p>
             <a
               href="/api/auth/google/start"
@@ -75,6 +103,39 @@ export default async function SettingsPage({
             </a>
           </div>
         )}
+      </Section>
+
+      <Section title="Reply auto-drafting (v0.9)">
+        <p className="text-sm text-gray-600">
+          When ON, Tay auto-drafts a reply for inbound messages classified
+          as &quot;interested&quot;. Drafts still go through the judge and
+          land in the queue for your review before sending — auto-reply
+          NEVER sends without your click. Default: OFF (this is a
+          trust-tier decision).
+        </p>
+        <form action={setAutoReplyAction} className="mt-3">
+          <input
+            type="hidden"
+            name="enabled"
+            value={replySettings.autoReplyEnabled ? "false" : "true"}
+          />
+          <button
+            type="submit"
+            className={
+              replySettings.autoReplyEnabled
+                ? "rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-900 hover:bg-amber-100"
+                : "rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-black"
+            }
+          >
+            {replySettings.autoReplyEnabled
+              ? "Turn auto-reply OFF"
+              : "Turn auto-reply ON"}
+          </button>
+          <span className="ml-3 text-xs text-gray-500">
+            Currently:{" "}
+            <strong>{replySettings.autoReplyEnabled ? "ON" : "OFF"}</strong>
+          </span>
+        </form>
       </Section>
 
       <Section title="Suppression list">
@@ -121,6 +182,11 @@ export default async function SettingsPage({
             ok={Boolean(process.env.NEXT_PUBLIC_SITE_URL)}
             label="NEXT_PUBLIC_SITE_URL"
             help="Used to build the OAuth redirect URI."
+          />
+          <StatusRow
+            ok={Boolean(process.env.CRON_SECRET)}
+            label="CRON_SECRET"
+            help="Required for /api/cron/poll-gmail. Vercel Cron sets the Authorization header automatically."
           />
         </ul>
       </Section>
@@ -216,6 +282,8 @@ function describeError(code: string): string {
       return "Could not exchange the authorization code with Google. Try again, or check that your OAuth client is configured correctly.";
     case "disconnect_failed":
       return "Could not disconnect Gmail. Try again.";
+    case "auto_reply_toggle_failed":
+      return "Could not change auto-reply setting. Try again.";
     default:
       return `Error: ${code}`;
   }

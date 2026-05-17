@@ -26,12 +26,20 @@
 //      | Replay click on same token  | "you're already unsubscribed"         |
 //      | DB write throws             | "expired or invalid" (don't lie)      |
 //
+// v0.9 carry-forward fix: replace the 5-second age heuristic with a
+// READ-BEFORE-UPSERT — getSuppressionEntry(email) lets us cleanly
+// distinguish first-click ("not yet present") from replay ("already
+// present"). The new helper is in lib/suppression/add.ts.
+//
 // Tay gate F: every successful add OR confirmed-replay calls appendAudit
 // with action "user.unsubscribed". The payload includes the lowercased
 // email (the redactor will mask "email_lower" since it contains the
 // "email" substring — confirmed by lib/audit/append.test.ts).
 
-import { addSuppression } from "@/lib/suppression/add";
+import {
+  addSuppression,
+  getSuppressionEntry,
+} from "@/lib/suppression/add";
 import { verifyUnsubscribeToken } from "@/lib/unsubscribe/token";
 import { appendAudit } from "@/lib/audit/append";
 import { ensureSchema } from "@/lib/supabase/migrate";
@@ -74,28 +82,28 @@ async function processUnsubscribe(token: string): Promise<Outcome> {
     return "invalid";
   }
 
-  try {
-    await addSuppression({
-      email: verified.email,
-      reason: "user_unsubscribe",
-      source: "unsubscribe-link",
-    });
-  } catch (err) {
-    console.warn(
-      "[unsubscribe] addSuppression failed:",
-      err instanceof Error ? err.message : String(err),
-    );
-    return "invalid";
+  // v0.9: READ BEFORE UPSERT. If the row already exists, we can
+  // deterministically render "already unsubscribed" without depending on
+  // the 5-second age heuristic from v0.8.
+  const existing = await getSuppressionEntry(verified.email);
+  const alreadyExisted = existing !== null;
+
+  if (!alreadyExisted) {
+    try {
+      await addSuppression({
+        email: verified.email,
+        reason: "user_unsubscribe",
+        source: "unsubscribe-link",
+      });
+    } catch (err) {
+      console.warn(
+        "[unsubscribe] addSuppression failed:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return "invalid";
+    }
   }
 
-  // addSuppression is idempotent (upsert with ignoreDuplicates). We
-  // can't easily tell first-add vs replay from the upsert result, so we
-  // distinguish by a follow-up read — keeps the UI message honest. If
-  // the read fails, fall through to "unsubscribed" (worst case the
-  // user sees "you're unsubscribed" twice — still correct).
-  const alreadyExisted = await wasPreviouslySuppressed(
-    verified.email,
-  );
   const outcome: Outcome = alreadyExisted ? "already" : "unsubscribed";
 
   // Audit (Tay gate F). Always append on a valid token even for replay
@@ -111,21 +119,6 @@ async function processUnsubscribe(token: string): Promise<Outcome> {
   });
 
   return outcome;
-}
-
-// Heuristic: a row that was added before the *very recent* add (more than
-// 5 seconds ago) was almost certainly there before this click. The
-// upsert+ignoreDuplicates is what gives us idempotence; this read just
-// classifies the UX.
-async function wasPreviouslySuppressed(email: string): Promise<boolean> {
-  const { listSuppressions } = await import("@/lib/suppression/add");
-  const entries = await listSuppressions(500);
-  const match = entries.find(
-    (e) => e.email === email.toLowerCase(),
-  );
-  if (!match) return false;
-  const ageMs = Date.now() - new Date(match.addedAt).getTime();
-  return ageMs > 5_000;
 }
 
 function renderOutcome(outcome: Outcome) {
