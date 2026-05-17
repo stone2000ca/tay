@@ -24,15 +24,25 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v1.1.2 — SMTP send (Easy mode) for 10-minute non-tech install
+## Status: v1.1.2.5 — IMAP reply polling for SMTP mode
+
+v1.1.2.5 closes the reply-pipeline gap left by v1.1.2. SMTP App Password users now get the full reply pipeline (classify → trust → auto-draft) on the same 5-minute cadence as the OAuth path — no extra setup, no Vercel config to touch.
+
+- **IMAP poller** — `lib/reply/imap-poll.ts` uses `imapflow` to fetch new messages over implicit-TLS port 993. Cursor advances by UID (`imap_poll_cursor` table; single-row `lock_col` UNIQUE pattern). First poll seeds from `uidNext - 1` without backfill — same "no historical replay" guarantee as the v0.9 Gmail History API path.
+- **Channel dispatcher** — `lib/reply/poll.ts` adds `pollReplies()` which reads `mailbox_credentials.kind` and delegates to either `pollGmail()` (OAuth) or `pollImapMailbox()` (SMTP). The cron route (`/api/cron/poll-gmail`, name preserved for `vercel.json` cron-config stability) now calls the dispatcher.
+- **Dual thread anchor** — `lib/reply/handle.ts` matches inbound replies via `sent_messages.gmail_thread_id` first (OAuth path) and falls back to `gmail_message_id` when the IMAP poller passes the parsed `In-Reply-To` header (SMTP path uses our generated `Message-ID` from `lib/send/smtp.ts` as the thread anchor).
+- **Channel-tagged audit** — `reply.received` and `reply.classified` audit entries now carry `channel: "oauth" | "app_password"` so the gate F chain records which transport saw each reply.
+- **Interim banner removed** — `/queue` and `/replies` no longer show the v1.1.2 "Reply polling activates in the next update" notice; SMTP users get the same replies surface as OAuth users today.
+- **Gate H preserved** — IMAP-fetched reply bodies flow through the existing `handleReply()` → `classifyReply()` path, so the `<untrusted_source>` wrap is still the load-bearing defense against prompt injection from attacker-controlled inbound mail.
+
+### Earlier — v1.1.2: SMTP send (Easy mode) for 10-minute non-tech install
 
 v1.1.2 ships the SMTP App Password path so non-technical users on personal Gmail can connect in ~2 minutes instead of doing the ~20-minute Google Cloud OAuth dance.
 
 - **Wizard mailbox step** (`/setup/mailbox`) — two-column choice: **Easy** (Gmail App Password) or **Power** (Google OAuth). Easy is recommended for personal Gmail; Power is required for Workspace and for passkey-only Google accounts (where App Passwords are no longer offered).
-- **SMTP via nodemailer** — `lib/send/smtp.ts` opens a single-shot STARTTLS connection to `smtp.gmail.com:587`, authenticates with the App Password, and sends. Message-ID is generated server-side so v1.1.2.5 (next update) can match IMAP replies by `In-Reply-To`. The orchestrator (`lib/send/orchestrate.ts`) is now channel-aware: same suppression / judge / audit / trust gates on both transports.
+- **SMTP via nodemailer** — `lib/send/smtp.ts` opens a single-shot STARTTLS connection to `smtp.gmail.com:587`, authenticates with the App Password, and sends. Message-ID is generated server-side so v1.1.2.5 can match IMAP replies by `In-Reply-To`. The orchestrator (`lib/send/orchestrate.ts`) is now channel-aware: same suppression / judge / audit / trust gates on both transports.
 - **Unified mailbox credentials** — new `mailbox_credentials` table replaces `google_oauth` as the primary read target. Backwards-compat fallback to `google_oauth` keeps existing v0.7+ OAuth installs working without forcing a reconnect.
 - **App Password verification** — `lib/send/smtp-verify.ts` runs an STARTTLS handshake at wizard time so wrong-password / wrong-host / TLS / passkey-only cases surface BEFORE the credentials are persisted. Auth failures route the user to the "try Power mode" suggestion (passkey-only Google accounts can't generate App Passwords).
-- **Interim banner** — `/queue` and `/replies` show an amber banner when SMTP mode is active: "Reply polling activates in the next update (v1.1.2.5)." Sends work now; IMAP polling for the SMTP channel ships separately.
 
 ### Earlier — v1.1.1: secrets foundation
 

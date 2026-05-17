@@ -1,4 +1,8 @@
-// Tests for the cron poll-gmail route — Tay v1.1.1 (judge fix-pass).
+// Tests for the cron poll-gmail route — Tay v1.1.2.5.
+//
+// v1.1.2.5: route delegates to pollReplies() (channel-aware) instead of
+// pollGmail() directly. The route name "poll-gmail" is preserved so the
+// vercel.json cron config doesn't have to change.
 //
 // Lock the call ordering: ensureSchema MUST run BEFORE the
 // Authorization header check. The cron bearer is read directly from
@@ -9,7 +13,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 const ensureSchemaMock = vi.fn();
-const pollGmailMock = vi.fn();
+const pollRepliesMock = vi.fn();
 const callOrder: string[] = [];
 
 vi.mock("@/lib/supabase/migrate", () => ({
@@ -20,9 +24,9 @@ vi.mock("@/lib/supabase/migrate", () => ({
 }));
 
 vi.mock("@/lib/reply/poll", () => ({
-  pollGmail: async () => {
-    callOrder.push("pollGmail");
-    return pollGmailMock();
+  pollReplies: async () => {
+    callOrder.push("pollReplies");
+    return pollRepliesMock();
   },
 }));
 
@@ -33,7 +37,7 @@ let originalCronSecret: string | undefined;
 beforeEach(() => {
   callOrder.length = 0;
   ensureSchemaMock.mockReset();
-  pollGmailMock.mockReset();
+  pollRepliesMock.mockReset();
   originalCronSecret = process.env.CRON_SECRET;
   process.env.CRON_SECRET = TEST_SECRET;
 });
@@ -47,7 +51,7 @@ afterEach(() => {
 describe("GET /api/cron/poll-gmail", () => {
   test("ensureSchema runs BEFORE auth check; pollGmail runs after success", async () => {
     ensureSchemaMock.mockReturnValue({ ran: false, skipped: true });
-    pollGmailMock.mockReturnValue({ inserted: 0, skipped: 0, errors: 0 });
+    pollRepliesMock.mockReturnValue({ inserted: 0, skipped: 0, errors: 0 });
 
     const { GET } = await import("./route");
     const req = new Request("http://localhost/api/cron/poll-gmail", {
@@ -57,7 +61,7 @@ describe("GET /api/cron/poll-gmail", () => {
     expect(resp.status).toBe(200);
 
     // Strict ordering invariant — schema bootstrap precedes the poller.
-    expect(callOrder).toEqual(["ensureSchema", "pollGmail"]);
+    expect(callOrder).toEqual(["ensureSchema", "pollReplies"]);
   });
 
   test("returns 503 when ensureSchema reports an error", async () => {
@@ -75,7 +79,7 @@ describe("GET /api/cron/poll-gmail", () => {
     const body = await resp.json();
     expect(body.error).toBe("schema_unavailable");
     // pollGmail must NOT have been called.
-    expect(callOrder).not.toContain("pollGmail");
+    expect(callOrder).not.toContain("pollReplies");
   });
 
   test("returns 503 cron_secret_not_configured when env var missing AND no auth header", async () => {
@@ -88,7 +92,7 @@ describe("GET /api/cron/poll-gmail", () => {
     const body = await resp.json();
     expect(body.error).toBe("cron_secret_not_configured");
     expect(body.hint).toMatch(/Vercel/i);
-    expect(callOrder).not.toContain("pollGmail");
+    expect(callOrder).not.toContain("pollReplies");
   });
 
   test("returns 401 when env var missing but caller sent an Authorization header", async () => {
@@ -102,7 +106,7 @@ describe("GET /api/cron/poll-gmail", () => {
     });
     const resp = await GET(req);
     expect(resp.status).toBe(401);
-    expect(callOrder).not.toContain("pollGmail");
+    expect(callOrder).not.toContain("pollReplies");
   });
 
   test("returns 401 when Authorization mismatches", async () => {
@@ -115,7 +119,7 @@ describe("GET /api/cron/poll-gmail", () => {
     expect(resp.status).toBe(401);
     const body = await resp.json();
     expect(body.error).toBe("unauthorized");
-    expect(callOrder).not.toContain("pollGmail");
+    expect(callOrder).not.toContain("pollReplies");
   });
 
   test("returns 401 when Authorization header missing entirely (env IS set)", async () => {

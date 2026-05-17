@@ -382,3 +382,102 @@ describe("handleReply — audit payload shape", () => {
     expect(payload).toHaveProperty("gmailMessageId");
   });
 });
+
+describe("handleReply — v1.1.2.5 dual thread anchor + channel tag", () => {
+  test("SMTP path: empty gmailThreadId + inReplyToMessageId → matches via gmail_message_id fallback", async () => {
+    // First query (gmail_thread_id lookup) — skipped when gmailThreadId
+    // is empty. But our FakeQuery layer doesn't know that; the
+    // implementation guard is the `if (args.gmailThreadId)` branch in
+    // handle.ts. So the FIRST query in our queue is the fallback
+    // (gmail_message_id eq) lookup, which should return the match.
+    const fallbackQ = freshQuery();
+    fallbackQ.result = {
+      data: {
+        id: "sent-1",
+        draft_id: "draft-1",
+        prospect_id: "prospect-1",
+        subject: "Hi Alice",
+        body: "original",
+      },
+      error: null,
+    };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    const updQ = freshQuery();
+    updQ.result = { data: null, error: null };
+    classifyMock.mockResolvedValue({
+      ok: true,
+      classification: {
+        intent: "interested",
+        confidence: 0.9,
+        reasons: ["x"],
+      },
+      modelUsed: "m",
+    });
+
+    const { handleReply } = await import("./handle");
+    const out = await handleReply({
+      ...baseArgs,
+      gmailThreadId: "", // SMTP has no thread id
+      inReplyToMessageId: "<sent-1@tay.local>",
+      channel: "app_password",
+    });
+    expect(out.ok).toBe(true);
+    // The reply row should persist the full body (not the unmatched
+    // sentinel) because we DID find a match via the fallback anchor.
+    expect(insQ.capturedInsert).toMatchObject({
+      sent_message_id: "sent-1",
+      body: "thanks for reaching out",
+    });
+  });
+
+  test("audit payload carries channel tag (app_password) when provided", async () => {
+    const sentQ = freshQuery();
+    sentQ.result = {
+      data: {
+        id: "sent-1",
+        draft_id: "draft-1",
+        prospect_id: "prospect-1",
+        subject: "Hi",
+        body: "original",
+      },
+      error: null,
+    };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    const updQ = freshQuery();
+    updQ.result = { data: null, error: null };
+    classifyMock.mockResolvedValue({
+      ok: true,
+      classification: { intent: "interested", confidence: 0.9, reasons: ["x"] },
+      modelUsed: "m",
+    });
+
+    const { handleReply } = await import("./handle");
+    await handleReply({ ...baseArgs, channel: "app_password" });
+
+    const receivedCalls = appendAuditMock.mock.calls.filter(
+      ([a]) => (a as { action: string }).action === "reply.received",
+    );
+    const payload = (receivedCalls[0][0] as { payload: Record<string, unknown> })
+      .payload;
+    expect(payload).toHaveProperty("channel", "app_password");
+  });
+
+  test("audit payload defaults channel='oauth' when caller omits it (v0.9 caller compat)", async () => {
+    const sentQ = freshQuery();
+    sentQ.result = { data: null, error: null };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+
+    const { handleReply } = await import("./handle");
+    await handleReply(baseArgs);
+
+    const receivedCalls = appendAuditMock.mock.calls.filter(
+      ([a]) => (a as { action: string }).action === "reply.received",
+    );
+    const payload = (receivedCalls[0][0] as { payload: Record<string, unknown> })
+      .payload;
+    expect(payload).toHaveProperty("channel", "oauth");
+  });
+});

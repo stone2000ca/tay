@@ -26,6 +26,19 @@ vi.mock("./handle", () => ({
   handleReply: (...a: unknown[]) => handleReplyMock(...a),
 }));
 
+// v1.1.2.5 — pollReplies dispatcher depends on getMailboxKind + the IMAP
+// poller. We mock both at this seam so the OAuth-side tests above still
+// exercise the real pollGmail() body.
+const getMailboxKindMock = vi.fn();
+vi.mock("../mailbox/persist", () => ({
+  getMailboxKind: () => getMailboxKindMock(),
+}));
+
+const pollImapMailboxMock = vi.fn();
+vi.mock("./imap-poll", () => ({
+  pollImapMailbox: () => pollImapMailboxMock(),
+}));
+
 // Supabase mock — programmable per-call queries.
 type ChainResult = { data?: unknown; error?: { message: string } | null };
 class FakeQuery {
@@ -80,6 +93,8 @@ beforeEach(() => {
   getMessageMock.mockReset();
   handleReplyMock.mockReset();
   hasSupabaseEnvMock.mockReturnValue(true);
+  getMailboxKindMock.mockReset();
+  pollImapMailboxMock.mockReset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
   vi.spyOn(console, "log").mockImplementation(() => {});
 });
@@ -291,6 +306,75 @@ describe("pollGmail", () => {
     const out = await pollGmail();
     expect(out.errors).toBe(1);
     expect(out.processed).toBe(0);
+  });
+});
+
+describe("pollReplies (v1.1.2.5 channel dispatcher)", () => {
+  test("oauth kind → delegates to pollGmail, tags channel='oauth'", async () => {
+    getMailboxKindMock.mockResolvedValueOnce("oauth");
+    // Drive the inner pollGmail() down its no-cursor seed path (lightest
+    // possible) by returning a null cursor and giving getProfile a value.
+    const cursorReadQ = freshQuery();
+    cursorReadQ.result = { data: null, error: null };
+    const cursorUpsertQ = freshQuery();
+    cursorUpsertQ.result = { data: null, error: null };
+    getProfileMock.mockResolvedValueOnce({
+      emailAddress: "me@example.com",
+      historyId: "1000",
+    });
+
+    const { pollReplies } = await import("./poll");
+    const out = await pollReplies();
+    expect(out.channel).toBe("oauth");
+    expect(out.processed).toBe(0);
+    expect(pollImapMailboxMock).not.toHaveBeenCalled();
+  });
+
+  test("app_password kind → delegates to pollImapMailbox, tags channel='app_password'", async () => {
+    getMailboxKindMock.mockResolvedValueOnce("app_password");
+    pollImapMailboxMock.mockResolvedValueOnce({
+      processed: 3,
+      skipped: 1,
+      errors: 0,
+    });
+    const { pollReplies } = await import("./poll");
+    const out = await pollReplies();
+    expect(out).toEqual({
+      channel: "app_password",
+      processed: 3,
+      skipped: 1,
+      errors: 0,
+    });
+    expect(pollImapMailboxMock).toHaveBeenCalledOnce();
+  });
+
+  test("app_password kind: pollImapMailbox reason is forwarded", async () => {
+    getMailboxKindMock.mockResolvedValueOnce("app_password");
+    pollImapMailboxMock.mockResolvedValueOnce({
+      processed: 0,
+      skipped: 0,
+      errors: 0,
+      reason: "auth_failed",
+    });
+    const { pollReplies } = await import("./poll");
+    const out = await pollReplies();
+    expect(out.reason).toBe("auth_failed");
+    expect(out.channel).toBe("app_password");
+  });
+
+  test("no mailbox kind → channel='none', reason='no_mailbox', no poller called", async () => {
+    getMailboxKindMock.mockResolvedValueOnce(null);
+    const { pollReplies } = await import("./poll");
+    const out = await pollReplies();
+    expect(out).toEqual({
+      channel: "none",
+      processed: 0,
+      skipped: 0,
+      errors: 0,
+      reason: "no_mailbox",
+    });
+    expect(pollImapMailboxMock).not.toHaveBeenCalled();
+    expect(ensureFreshAccessTokenMock).not.toHaveBeenCalled();
   });
 });
 

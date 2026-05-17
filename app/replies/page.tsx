@@ -1,15 +1,19 @@
-// /replies — v0.9 inbound-reply review surface.
+// /replies — v0.9 / v1.1.2.5 inbound-reply review surface.
 //
 // Server component. Lists the most-recent 50 `replies` rows with their
 // classified intent + linked thread, plus a column noting whether Tay
 // auto-drafted a reply.
 //
+// v1.1.2.5: replies arrive via two channels now — Gmail History API
+// (OAuth path) and IMAP polling (SMTP App Password path). The page is
+// channel-agnostic: both write into the same `replies` table via the
+// same handleReply() orchestrator.
+//
 // Wizard degraded-state matrix:
 //   - Supabase not configured → render SupabaseWarning + empty list.
-//   - Gmail not connected → amber banner pointing at Settings.
-//   - Gmail connected but read scope missing (pre-v0.9 connection) →
-//     amber banner pointing at Settings ("Reconnect Gmail for reply
-//     handling").
+//   - Mailbox not connected → amber banner pointing at Settings.
+//   - OAuth mailbox marked connected but token row missing → amber.
+//   - OAuth grant lacks read scope (pre-v0.9) → amber banner; reconnect.
 //   - Voice rubric missing → amber banner (auto-drafts can't run).
 //   - CRON_SECRET missing → red banner (poller will never fire).
 //   - No replies yet → empty-state message.
@@ -71,7 +75,8 @@ export default async function RepliesPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Replies</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Inbound replies Tay polled from Gmail and classified by intent.
+            Inbound replies Tay polled from your mailbox and classified by
+            intent.
             {settings.autoReplyEnabled
               ? " Auto-drafting is ON for 'interested' replies."
               : " Auto-drafting is OFF (toggle in Settings)."}
@@ -136,20 +141,12 @@ export default async function RepliesPage() {
           CRON_SECRET in your Vercel env and redeploy.
         </Banner>
       )}
-      {mailboxKind === "app_password" && (
-        <Banner kind="amber">
-          <strong>Reply polling activates in the next update (v1.1.2.5).</strong>{" "}
-          You connected via SMTP App Password (Easy mode), so we don&rsquo;t
-          have Gmail Push access. You can send now; replies will appear here
-          once we add IMAP polling. For now, check your Gmail inbox manually.
-        </Banner>
-      )}
-
       <section className="mt-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
         {rows.length === 0 ? (
           <div className="px-6 py-10 text-sm text-gray-500">
-            No replies yet. The poller runs every 5 minutes once Gmail is
-            connected with read scope.
+            No replies yet. The poller runs every 5 minutes once your
+            mailbox is connected (Gmail History API for OAuth, IMAP for
+            SMTP App Password).
           </div>
         ) : (
           <RepliesTable rows={rows} />
