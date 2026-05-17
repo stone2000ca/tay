@@ -1,8 +1,13 @@
 // Tay v1.1.1 — instance secret derivation (HKDF-SHA256).
 //
-// The user no longer pastes TAY_OAUTH_SECRET / CRON_SECRET into their
-// hosting env. Instead, every per-purpose secret is DERIVED from two
-// things they already manage:
+// The user no longer pastes TAY_OAUTH_SECRET into their hosting env.
+// Instead, every per-purpose secret is DERIVED from two things they
+// already manage:
+//
+// NOTE: CRON_SECRET is NOT derived here. Vercel Cron's auth mechanism
+// reads `process.env.CRON_SECRET` directly (Vercel auto-sets it for
+// cron-enabled projects), so HKDF-deriving a value that needs to match
+// an external system would 401-loop. The cron route reads env directly.
 //
 //   IKM  (input keying material) = SUPABASE_SERVICE_ROLE_KEY
 //   salt                         = 32 random bytes stored in
@@ -34,15 +39,15 @@
 //     Race-safe via INSERT ... ON CONFLICT DO NOTHING + re-read.
 //
 // Backwards-compat env-var fallback:
-//   For developers on v0.x who set TAY_OAUTH_SECRET / CRON_SECRET in
-//   .env.local, we fall back to those values when the Supabase
-//   service-role key is absent. Logs a deprecation warning so the
-//   misconfig is visible. Disappears in v1.2.
+//   For developers on v0.x who set TAY_OAUTH_SECRET in .env.local, we
+//   fall back to that value when the Supabase service-role key is
+//   absent. Logs a deprecation warning so the misconfig is visible.
+//   Disappears in v1.2.
 
 import { hkdfSync, randomBytes } from "node:crypto";
 import { Client } from "pg";
 
-export type SecretPurpose = "oauth" | "unsubscribe" | "cron";
+export type SecretPurpose = "oauth" | "unsubscribe";
 
 const TABLE = "instance_secrets";
 const HKDF_HASH = "sha256";
@@ -97,21 +102,17 @@ export async function getInstanceSecret(
 
 /**
  * Return the IKM-less env-var fallback for a purpose, if one exists.
- * Only `oauth` and `cron` had dedicated env vars in v0.x — `unsubscribe`
- * piggybacked on TAY_OAUTH_SECRET, so its fallback also reads that var.
+ * Both `oauth` and `unsubscribe` read TAY_OAUTH_SECRET — they shared
+ * the same secret in v0.x. (CRON_SECRET is NOT a derived purpose; the
+ * cron route reads process.env.CRON_SECRET directly because Vercel
+ * Cron auto-sets that env var.)
  *
  * Validates the fallback against the same 64-hex shape we'd produce
  * ourselves. A malformed env-var is treated as "no fallback" — we'd
  * rather throw than encrypt with garbage.
  */
-function envFallback(purpose: SecretPurpose): string | null {
-  let raw: string | undefined;
-  if (purpose === "cron") {
-    raw = process.env.CRON_SECRET;
-  } else {
-    // oauth + unsubscribe shared the same secret in v0.x.
-    raw = process.env.TAY_OAUTH_SECRET;
-  }
+function envFallback(_purpose: SecretPurpose): string | null {
+  const raw = process.env.TAY_OAUTH_SECRET;
   if (!raw) return null;
   if (!/^[0-9a-fA-F]{64}$/.test(raw)) return null;
   return raw.toLowerCase();

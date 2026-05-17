@@ -315,22 +315,45 @@ export async function chatComplete(
   try {
     if (got.provider === "anthropic") {
       const client = got.client as Anthropic;
-      const system = args.messages
+      let system = args.messages
         .filter((m) => m.role === "system")
         .map((m) => m.content)
         .join("\n\n");
+      // Anthropic doesn't have an OpenAI-style `response_format`.
+      // When callers request JSON mode, reinforce it via the system
+      // message so the model returns parseable JSON. Idempotent —
+      // callers that already say "output JSON" just get a slightly
+      // more emphatic restatement.
+      if (args.response_format?.type === "json_object") {
+        const jsonHint =
+          "\n\nOutput ONLY a single valid JSON object. No prose. No markdown fences.";
+        system = system.length > 0 ? system + jsonHint : jsonHint.trimStart();
+      }
       const nonSystem = args.messages
         .filter((m) => m.role !== "system")
         .map((m) => ({
           role: m.role as "user" | "assistant",
           content: m.content,
         }));
+      // Anthropic's API rejects empty content. Surface this loudly at
+      // the call site instead of silently sending a "" placeholder
+      // that would either error remotely or produce garbage output.
+      // Return a structured error (not a thrown exception) so the
+      // caller's `if (!result.ok)` branch handles it without losing
+      // the diagnostic message in the catch-all SDK-error mapper.
+      if (nonSystem.length === 0) {
+        return {
+          ok: false,
+          error:
+            "chatComplete requires at least one non-system message (Anthropic provider).",
+        };
+      }
       const resp = await client.messages.create({
         model: args.model,
         max_tokens: args.max_tokens ?? 1024,
         temperature: args.temperature,
         system: system.length > 0 ? system : undefined,
-        messages: nonSystem.length > 0 ? nonSystem : [{ role: "user", content: "" }],
+        messages: nonSystem,
       });
       // The Anthropic SDK returns a content array; we take the first
       // text block. Tool-use is not used here (v1.x).

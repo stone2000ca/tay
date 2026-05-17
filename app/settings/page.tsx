@@ -15,6 +15,7 @@ import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
 import { hasReadScope } from "@/lib/oauth/google";
 import { getReplySettings } from "@/lib/reply/settings";
+import { getSiteUrl } from "@/lib/site-url";
 import { disconnectGmailAction, setAutoReplyAction } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -205,19 +206,54 @@ export default async function SettingsPage({
             label="GOOGLE_OAUTH_CLIENT_SECRET"
             help="From the same Google Cloud OAuth client as the ID."
           />
-          <StatusRow
-            ok={Boolean(process.env.NEXT_PUBLIC_SITE_URL)}
-            label="NEXT_PUBLIC_SITE_URL"
-            help="Used to build the OAuth redirect URI."
+          <InfoRow
+            label="Site URL"
+            value={getSiteUrl()}
+            help="Auto-detected via NEXT_PUBLIC_SITE_URL, then VERCEL_PROJECT_PRODUCTION_URL, then VERCEL_URL, then localhost. Override NEXT_PUBLIC_SITE_URL only if you're on a custom domain."
           />
-          <StatusRow
+          <InfoRow
+            label="Cron secret"
+            value={
+              process.env.CRON_SECRET
+                ? "Vercel-managed (auto-set on deploy)"
+                : "missing — set CRON_SECRET in your env if you're not on Vercel"
+            }
+            help="Used by Vercel Cron to call /api/cron/poll-gmail. Vercel auto-sets this for any project with a vercel.json cron config."
             ok={Boolean(process.env.CRON_SECRET)}
-            label="CRON_SECRET"
-            help="Required for /api/cron/poll-gmail. Vercel Cron sets the Authorization header automatically."
           />
         </ul>
       </Section>
     </main>
+  );
+}
+
+function InfoRow({
+  label,
+  value,
+  help,
+  ok = true,
+}: {
+  label: string;
+  value: string;
+  help: string;
+  ok?: boolean;
+}) {
+  return (
+    <li className="flex items-start gap-3">
+      <span
+        aria-label={ok ? "configured" : "missing"}
+        className={`mt-1 inline-block h-2.5 w-2.5 rounded-full ${
+          ok ? "bg-green-500" : "bg-amber-500"
+        }`}
+      />
+      <div>
+        <div className="font-medium text-gray-900">
+          {label}{" "}
+          <span className="text-xs text-gray-500">{value}</span>
+        </div>
+        <div className="text-xs text-gray-500">{help}</div>
+      </div>
+    </li>
   );
 }
 

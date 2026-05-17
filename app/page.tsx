@@ -94,7 +94,7 @@ export default async function HomePage() {
         </section>
 
         <p className="mt-10 text-center text-xs text-gray-400">
-          v0.4 — drafter v1 (OpenRouter + voice rubric)
+          v1.1.1 — secrets foundation + multi-provider LLM keys
         </p>
       </div>
     </main>

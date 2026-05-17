@@ -265,4 +265,62 @@ describe("chatComplete", () => {
     expect(out.ok).toBe(false);
     if (!out.ok) expect(out.error).toMatch(/LLM not configured/);
   });
+
+  test("anthropic: response_format=json_object appends JSON-only instruction to system prompt", async () => {
+    getLlmKeyMock.mockResolvedValueOnce({
+      provider: "anthropic",
+      plaintext: "sk-ant-x",
+    });
+    anthropicCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "{}" }],
+    });
+    const { chatComplete } = await import("./llm");
+    await chatComplete({
+      model: "claude-x",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: "be brief" },
+        { role: "user", content: "give me json" },
+      ],
+    });
+    const args = anthropicCreate.mock.calls[0][0];
+    expect(args.system).toMatch(/be brief/);
+    expect(args.system).toMatch(/ONLY a single valid JSON object/i);
+    expect(args.system).toMatch(/No markdown fences/i);
+  });
+
+  test("anthropic: response_format=json_object with NO system message still injects the instruction", async () => {
+    getLlmKeyMock.mockResolvedValueOnce({
+      provider: "anthropic",
+      plaintext: "sk-ant-x",
+    });
+    anthropicCreate.mockResolvedValueOnce({
+      content: [{ type: "text", text: "{}" }],
+    });
+    const { chatComplete } = await import("./llm");
+    await chatComplete({
+      model: "claude-x",
+      response_format: { type: "json_object" },
+      messages: [{ role: "user", content: "give me json" }],
+    });
+    const args = anthropicCreate.mock.calls[0][0];
+    expect(args.system).toMatch(/ONLY a single valid JSON object/i);
+  });
+
+  test("anthropic: throws clear error when only system messages provided (no user/assistant)", async () => {
+    getLlmKeyMock.mockResolvedValueOnce({
+      provider: "anthropic",
+      plaintext: "sk-ant-x",
+    });
+    const { chatComplete } = await import("./llm");
+    const out = await chatComplete({
+      model: "claude-x",
+      messages: [{ role: "system", content: "be brief" }],
+    });
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.error).toMatch(/at least one non-system message/i);
+    }
+    expect(anthropicCreate).not.toHaveBeenCalled();
+  });
 });

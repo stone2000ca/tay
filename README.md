@@ -28,7 +28,7 @@ Cold-outbound AI tools that run on someone else's servers see every prospect you
 
 The first milestone after the v1.0 SHIP GATE. v1.1.1 ships the secrets foundation that lets a non-technical user install Tay without touching a terminal:
 
-- **Derived per-purpose secrets** — `TAY_OAUTH_SECRET` and `CRON_SECRET` are gone from your env. Both are derived via HKDF-SHA256(`SUPABASE_SERVICE_ROLE_KEY`, `instance_secrets.salt`, per-purpose `info`) on every request. The salt is minted automatically on first cold start and lives in your own Supabase. (Legacy env vars are still accepted as a fallback for v0.x installs upgrading in place.)
+- **Derived per-purpose secrets** — `TAY_OAUTH_SECRET` is gone from your env. The OAuth-token AES key and the unsubscribe HMAC are derived via HKDF-SHA256(`SUPABASE_SERVICE_ROLE_KEY`, `instance_secrets.salt`, per-purpose `info`) on every request. The salt is minted automatically on first cold start and lives in your own Supabase. (Legacy `TAY_OAUTH_SECRET` is still accepted as a fallback for v0.x installs upgrading in place.) `CRON_SECRET` is NOT derived — Vercel Cron's auth mechanism reads `process.env.CRON_SECRET` directly, and Vercel auto-sets it for any project with a `vercel.json` cron config. Non-Vercel deploys must set it manually like any other env var.
 - **BYO LLM provider** — Tay now supports Anthropic (`sk-ant-…`), OpenAI (`sk-…`), and OpenRouter (`sk-or-…`) via auto-detection from the key prefix. The wizard collects your key in-app, encrypts it (AES-256-GCM via the derived OAuth secret), and stores it in `instance_secrets`. Drafter / judge / reply / voice all use a provider-neutral `chatComplete` adapter.
 - **`VERCEL_URL` auto-detection** — `NEXT_PUBLIC_SITE_URL` is now optional. Tay falls through to `VERCEL_PROJECT_PRODUCTION_URL` and `VERCEL_URL` (both auto-set by Vercel) before defaulting to `http://localhost:3000`. The OAuth callback + unsubscribe links pick up the right host without manual configuration.
 
@@ -65,7 +65,7 @@ Runs `vitest run journeys` — the 10 adversarial scenarios + an aggregated summ
 | `OPENROUTER_MODEL_CHEAP` | Override the default cheap OpenRouter model | optional |
 | `OPENROUTER_MODEL_QUALITY` | Override the default quality OpenRouter model | optional |
 | `TAY_OAUTH_SECRET` | DEPRECATED. v0.x env var; v1.1.1 derives this. Still honored as fallback while you migrate | optional |
-| `CRON_SECRET` | DEPRECATED. v0.x env var; v1.1.1 derives this. Still honored as fallback while you migrate | optional |
+| `CRON_SECRET` | Auto-set by Vercel when a `vercel.json` cron is configured. Non-Vercel deploys must set this manually | auto on Vercel |
 
 For local development, copy [.env.example](./.env.example) to `.env.local`. The LLM API key is collected by the in-app wizard, not env vars.
 
