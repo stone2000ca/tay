@@ -1,33 +1,33 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #011)
-**Status:** ✅ **v1.1.1 merged. Continuing v1.x simplification arc.**
-**Roadmap progress:** v0.x complete (11/11); v1.1.1 merged (1/5 of v1.1 milestones).
+**Last updated:** 2026-05-17 (Run #012)
+**Status:** ✅ **v1.1.2 merged. Continuing v1.x simplification arc.**
+**Roadmap progress:** v0.x complete (11/11); v1.1.1 + v1.1.2 merged (2/5 of v1.1 milestones).
 
 ## Currently in flight
 
-(None — run #011 closed cleanly.)
+(None — run #012 closed cleanly.)
 
-## Next up — v1.1.2
+## Next up — v1.1.2.5
 
-Per `simplification-plan.md` (v3), v1.1.2 ships **SMTP send (Easy mode)** so non-tech users on personal Gmail can connect with a 2-step App Password instead of the 20-step Google Cloud OAuth flow. Reply polling for SMTP mode is split out to v1.1.2.5 (interim banner makes the limitation visible). All seven Tay gates still apply.
+Per `simplification-plan.md` (v3, P3b), v1.1.2.5 ships **IMAP reply polling for SMTP mode** so the v1.1.2 SMTP path becomes fully bidirectional. This removes the interim banner that v1.1.2 placed on `/queue` + `/replies`.
 
 **Scope:**
-- Wizard mailbox step: Easy (SMTP App Password) or Power (Google OAuth, existing path). Default = Easy.
-- SMTP path: paste sender email + App Password → SMTP STARTTLS handshake → store credentials encrypted (existing crypto layer)
-- `lib/send/smtp.ts` via `nodemailer`; `mailbox_credentials` table with `kind: "oauth" | "app_password"`
-- `lib/send/orchestrate.ts` becomes channel-aware (Gates E/F/I unaffected by transport)
-- Interim banner in `/queue` and `/replies`: "Reply polling activates in v1.1.2.5"
-- Auto-detect App Password availability via STARTTLS handshake; if rejected with auth error, suggest Power mode with linked guide (App Password deprecation defense)
+- `lib/reply/imap-poll.ts` using `imapflow`
+- Thread-matching by `Message-ID` / `In-Reply-To` headers (SMTP send already sets these via nodemailer in v1.1.2)
+- `imap_poll_cursor` table (single-row, `lock_col UNIQUE` pattern)
+- `lib/reply/poll.ts` dispatches by `mailbox_credentials.kind`: oauth → existing Gmail History API path; app_password → new IMAP path
+- Remove the v1.1.2 interim banner once IMAP polling lands
+- All 7 Tay gates still apply (H is load-bearing — IMAP body becomes new untrusted-input surface; existing `<untrusted_source>` wrap in classifier handles it)
 
-See `simplification-plan.md` P3a section for full spec.
+See `simplification-plan.md` P3b section for full spec.
 
 ## v1.x roadmap (from simplification-plan.md v3)
 
 | Milestone | Status | Bundles | PR |
 |---|---|---|---|
 | v1.1.1 | MERGED #011 | P1 secrets foundation + P2 multi-provider LLM + VERCEL_URL | [#22](https://github.com/stone2000ca/tay/pull/22) — `ad39d163` |
-| v1.1.2 | NOT_STARTED | P3a SMTP send (Easy mode) + interim banner | — |
+| v1.1.2 | MERGED #012 | P3a SMTP send (Easy mode) + interim banner | [#24](https://github.com/stone2000ca/tay/pull/24) — `92049d35` |
 | v1.1.2.5 | NOT_STARTED | P3b IMAP polling for SMTP mode | — |
 | v1.1.3 | NOT_STARTED | P4 rubric preview + P5 voice cal paths + P6 test-send & prospect quick-add | — |
 | v1.1.4 | NOT_STARTED | P7 reply notifications | — |

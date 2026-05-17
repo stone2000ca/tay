@@ -395,6 +395,36 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #012 — (not yet started)
+## Run #012 — 2026-05-17 (~70 min including fix-pass) — **v1.1.2 (SMTP send / Easy mode)**
 
-Next invocation picks up v1.1.2 — SMTP send (Easy mode). User chooses SMTP App Password or Google OAuth at wizard mailbox step. SMTP path uses nodemailer + STARTTLS verification. Reply polling for SMTP mode lands in v1.1.2.5 (interim banner makes the limitation visible).
+**Milestone:** v1.1.2 — SMTP send + channel-aware orchestrator + interim reply-polling banner
+**PR:** [#24](https://github.com/stone2000ca/tay/pull/24) — squashed as `92049d35`
+**Judge:** first NEEDS-FIXES (1 blocker + 4 others) → fix-pass → APPROVED. Final 4/5 process, 4/5 product.
+
+### What landed
+- Migration 0012: `mailbox_credentials` (single-row, channel-aware)
+- `lib/send/smtp.ts` + `smtp-verify.ts` via nodemailer (STARTTLS, RFC-5322 Message-ID, log-probe-tested)
+- `lib/mailbox/persist.ts` (unified persistence; backwards-compat fallback to legacy google_oauth)
+- `lib/send/orchestrate.ts` channel-aware (suppression BEFORE branch; gate-ordering test per channel)
+- New `/setup/mailbox` wizard step (Easy/Power columns; auth_failed → switch-to-Power suggestion)
+- Interim banner on `/queue` + `/replies` for SMTP mode (honest about v1.1.2.5)
+- v0.7 OAuth callback now dual-writes to both tables (eliminates forever-fallback path)
+- AuditAction extended with `mailbox.{connected,disconnected}`
+- 478 unit + 10 journey tests
+
+### Notable
+- **Real shipped-broken bug caught by judge first-pass:** `/queue` Send button was disabled for SMTP-only users because the page still derived `canSend` from the legacy `oauth` table. Wizard would have completed successfully but the user would have hit a disabled button on first prospect. Fix-pass cleanly addressed this half-migration.
+- **Process improvement codified:** when introducing a channel-aware abstraction, grep for every consumer of the legacy signal. Two-minute check would have caught this.
+- **Mental walk-through requirement:** for wizard-completing milestones, mentally walk through as a brand-new user end-to-end (wizard → primary action → click). The blocker was invisible from unit tests but obvious from the user's path.
+
+### v1.1.2.5 carry-forward (load-bearing)
+- IMAP reply polling for SMTP mode. The v1.1.2 interim banner is the contract — v1.1.2.5 removes it once IMAP polling works. Per simplification-plan P3b.
+
+### Detailed checkpoint
+`builds/checkpoints/run-012-2026-05-17.md`
+
+---
+
+## Run #013 — (not yet started)
+
+Next invocation picks up v1.1.2.5 — IMAP reply polling for SMTP mode. New `lib/reply/imap-poll.ts` using `imapflow`. Thread-matching by Message-ID / In-Reply-To headers (SMTP send sets these via nodemailer). New `imap_poll_cursor` table. `lib/reply/poll.ts` dispatches by `mailbox_credentials.kind`. Remove v1.1.2 interim banner once shipped.
