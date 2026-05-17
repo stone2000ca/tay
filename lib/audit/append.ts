@@ -64,7 +64,13 @@ export type AuditAction =
   // v1.1.1 — instance-secrets lifecycle (Tay gate F).
   | "secrets.salt_bootstrapped"
   | "secrets.llm_key_set"
-  | "secrets.llm_key_rotated";
+  | "secrets.llm_key_rotated"
+  // v1.1.2 — channel-agnostic mailbox lifecycle (Tay gate F).
+  // The legacy oauth.connected / oauth.disconnected events from v0.7
+  // stay (they were Google-OAuth-specific). New connect/disconnect
+  // flows write mailbox.* — kind: "oauth" | "app_password".
+  | "mailbox.connected"
+  | "mailbox.disconnected";
 
 export type AuditEvent = {
   action: AuditAction;

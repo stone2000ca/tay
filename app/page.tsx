@@ -5,6 +5,7 @@ import { ensureSchema } from "@/lib/supabase/migrate";
 import { getRubric } from "@/lib/voice/calibrate";
 import { getDraftCount } from "@/lib/draft/persist";
 import { getLlmKeyMetadata } from "@/lib/secrets/llm-key";
+import { getMailboxKind } from "@/lib/mailbox/persist";
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -41,10 +42,20 @@ export default async function HomePage() {
     redirect("/setup/llm-key");
   }
 
-  // Voice calibration is wizard step 3. If LLM key exists but no rubric,
-  // push to /setup/voice. getRubric is a soft-fail READ — null could
-  // mean "not calibrated" or "Supabase unavailable"; either way we'd
-  // rather show the calibration page than a half-configured dashboard.
+  // v1.1.2: mailbox connection is wizard step 3. The user picks Easy
+  // (SMTP App Password) or Power (Google OAuth). getMailboxKind is a
+  // soft-fail READ that also checks the legacy google_oauth table for
+  // backwards-compat with v0.7+ installs.
+  const mailboxKind = await getMailboxKind();
+  if (!mailboxKind) {
+    redirect("/setup/mailbox");
+  }
+
+  // Voice calibration is wizard step 4. If LLM key + mailbox exist but
+  // no rubric, push to /setup/voice. getRubric is a soft-fail READ —
+  // null could mean "not calibrated" or "Supabase unavailable"; either
+  // way we'd rather show the calibration page than a half-configured
+  // dashboard.
   const rubric = await getRubric();
   if (!rubric) {
     redirect("/setup/voice");
@@ -94,7 +105,7 @@ export default async function HomePage() {
         </section>
 
         <p className="mt-10 text-center text-xs text-gray-400">
-          v1.1.1 — secrets foundation + multi-provider LLM keys
+          v1.1.2 — SMTP send (Easy mode)
         </p>
       </div>
     </main>

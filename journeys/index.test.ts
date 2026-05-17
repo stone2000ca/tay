@@ -16,8 +16,10 @@ import {
   makeAuditMock,
   makeGmailSendMock,
   makeJudgePersistMock,
+  makeMailboxPersistMock,
   makeOAuthPersistMock,
   makeOpenAiMock,
+  makeSmtpSendMock,
   makeSupabaseMock,
   makeSuppressionCheckMock,
   makeTrustRecordMock,
@@ -84,6 +86,10 @@ vi.mock("@/lib/oauth/persist", () => makeOAuthPersistMock());
 vi.mock("../lib/oauth/persist", () => makeOAuthPersistMock());
 vi.mock("@/lib/send/gmail", () => makeGmailSendMock());
 vi.mock("../lib/send/gmail", () => makeGmailSendMock());
+vi.mock("@/lib/send/smtp", () => makeSmtpSendMock());
+vi.mock("../lib/send/smtp", () => makeSmtpSendMock());
+vi.mock("@/lib/mailbox/persist", () => makeMailboxPersistMock());
+vi.mock("../lib/mailbox/persist", () => makeMailboxPersistMock());
 
 import { scenarios } from "./scenarios";
 import { runJourney, runAllJourneys, formatSummary } from "./runner";

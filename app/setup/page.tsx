@@ -35,7 +35,7 @@ export default function SetupPage() {
       <div className="max-w-xl w-full">
         <div className="text-center">
           <h1 className="text-3xl font-semibold tracking-tight">Set up Tay</h1>
-          <p className="mt-2 text-sm text-gray-500">Step 1 of 3 — name your instance</p>
+          <p className="mt-2 text-sm text-gray-500">Step 1 of 4 — name your instance</p>
         </div>
 
         <form
@@ -79,7 +79,7 @@ export default function SetupPage() {
         </form>
 
         <p className="mt-6 text-center text-xs text-gray-500">
-          Up next: paste your LLM API key (Anthropic, OpenAI, or OpenRouter).
+          Up next: paste your LLM API key, then connect a mailbox.
         </p>
       </div>
     </main>

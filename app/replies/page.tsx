@@ -21,6 +21,7 @@ import { SupabaseWarning } from "@/components/supabase-warning";
 import { hasSupabaseEnv, getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
+import { getMailboxKind } from "@/lib/mailbox/persist";
 import { hasReadScope } from "@/lib/oauth/google";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getRubric } from "@/lib/voice/calibrate";
@@ -53,11 +54,12 @@ export default async function RepliesPage() {
   await ensureSchema();
 
   const oauthSecretOk = await hasOAuthSecret();
-  const [oauth, rubric, settings, rows] = await Promise.all([
+  const [oauth, rubric, settings, rows, mailboxKind] = await Promise.all([
     oauthSecretOk ? getGoogleOAuth() : Promise.resolve(null),
     getRubric(),
     getReplySettings(),
     loadReplyRows(),
+    getMailboxKind(),
   ]);
 
   const cronOk = Boolean(process.env.CRON_SECRET);
@@ -122,6 +124,14 @@ export default async function RepliesPage() {
           <strong>CRON_SECRET missing.</strong>{" "}
           The Vercel Cron trigger will be rejected as unauthorized. Set
           CRON_SECRET in your Vercel env and redeploy.
+        </Banner>
+      )}
+      {mailboxKind === "app_password" && (
+        <Banner kind="amber">
+          <strong>Reply polling activates in the next update (v1.1.2.5).</strong>{" "}
+          You connected via SMTP App Password (Easy mode), so we don&rsquo;t
+          have Gmail Push access. You can send now; replies will appear here
+          once we add IMAP polling. For now, check your Gmail inbox manually.
         </Banner>
       )}
 

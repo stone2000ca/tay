@@ -314,3 +314,73 @@ export function makeGmailSendMock(): Record<string, unknown> {
     },
   };
 }
+
+// send/smtp — v1.1.2 second channel. Mirrors gmail mock; tracks via the
+// same sendEmailCalls() so gate-E (suppression) assertions are
+// channel-agnostic. SMTP path returns { ok: true, messageId, threadId? }
+// (no threadId — orchestrator handles undefined → "").
+export function makeSmtpSendMock(): Record<string, unknown> {
+  return {
+    sendEmailViaSmtp: async (input: {
+      host: string;
+      port: number;
+      username: string;
+      password: string;
+      fromAddress: string;
+      to: string;
+      subject: string;
+      body: string;
+    }) => {
+      mockController.recordSendEmailCall({
+        to: input.to,
+        subject: input.subject,
+        body: input.body,
+      });
+      const programmed = mockController.takeSendEmailResult();
+      if (programmed && programmed.ok) {
+        return {
+          ok: true,
+          messageId: programmed.gmailMessageId,
+          threadId: programmed.gmailThreadId || undefined,
+        };
+      }
+      if (programmed && !programmed.ok) {
+        return { ok: false, error: programmed.error };
+      }
+      return {
+        ok: true,
+        messageId: "<smtp-fake-1@example.com>",
+        threadId: undefined,
+      };
+    },
+  };
+}
+
+// mailbox/persist — defaults to a connected oauth mailbox (matches
+// the v0.7-style happy-path the journeys were originally written
+// against). Scenarios that want SMTP mode can pushDbResult({ table:
+// "mailbox", method: "getMailboxCredentials" }, { data: <creds>, ... })
+// to override.
+export function makeMailboxPersistMock(): Record<string, unknown> {
+  return {
+    getMailboxCredentials: async () => {
+      const r = mockController.popDbResult("mailbox", "getMailboxCredentials");
+      if (r && r.data !== undefined) return r.data;
+      return {
+        kind: "oauth",
+        emailAddress: "tay-tester@example.com",
+        refreshToken: "rt-fake",
+        accessToken: "at-fake",
+        expiresAt: new Date(Date.now() + 3600_000).toISOString(),
+        scopes: "gmail.send gmail.readonly",
+      };
+    },
+    getMailboxKind: async () => {
+      const r = mockController.popDbResult("mailbox", "getMailboxKind");
+      if (r && r.data !== undefined) return r.data;
+      return "oauth";
+    },
+    saveMailboxCredentials: async () => {},
+    clearMailboxCredentials: async () => {},
+  };
+}

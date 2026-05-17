@@ -23,6 +23,7 @@ import { hasSupabaseEnv, getSupabaseServerClient } from "@/lib/supabase/server";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
+import { getMailboxKind } from "@/lib/mailbox/persist";
 import { getRubric } from "@/lib/voice/calibrate";
 import { sendDraftAction } from "./actions";
 
@@ -56,11 +57,12 @@ export default async function QueuePage({
 
   await ensureSchema();
 
-  const [oauth, rubric, rows, oauthSecretOk] = await Promise.all([
+  const [oauth, rubric, rows, oauthSecretOk, mailboxKind] = await Promise.all([
     getGoogleOAuth(),
     getRubric(),
     loadQueueRows(),
     hasOAuthSecret(),
+    getMailboxKind(),
   ]);
 
   return (
@@ -108,6 +110,13 @@ export default async function QueuePage({
             Complete voice calibration
           </Link>{" "}
           — the orchestrator refuses to send without one.
+        </Banner>
+      )}
+      {mailboxKind === "app_password" && (
+        <Banner kind="amber">
+          <strong>Reply polling activates in the next update (v1.1.2.5).</strong>{" "}
+          You can send now; replies will appear here once we add IMAP polling.
+          For now, check your Gmail inbox manually for replies.
         </Banner>
       )}
 

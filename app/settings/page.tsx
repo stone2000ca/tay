@@ -13,10 +13,12 @@ import Link from "next/link";
 import { hasSupabaseEnv } from "@/lib/supabase/server";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
+import { getMailboxCredentials } from "@/lib/mailbox/persist";
 import { hasReadScope } from "@/lib/oauth/google";
 import { getReplySettings } from "@/lib/reply/settings";
 import { getSiteUrl } from "@/lib/site-url";
 import { disconnectGmailAction, setAutoReplyAction } from "./actions";
+import { disconnectMailboxAction } from "../setup/mailbox/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -32,6 +34,10 @@ export default async function SettingsPage({
 }) {
   const params = await searchParams;
   const oauthSecretOk = await hasOAuthSecret();
+  const mailbox =
+    hasSupabaseEnv() && oauthSecretOk ? await getMailboxCredentials() : null;
+  // Keep the legacy oauth read for the legacy Gmail subsection so users
+  // mid-migration see consistent UI. v1.1.2 read path is `mailbox`.
   const oauth = hasSupabaseEnv() && oauthSecretOk ? await getGoogleOAuth() : null;
   const readScopeOk = oauth ? hasReadScope(oauth.scope) : false;
   const replySettings = await getReplySettings();
@@ -59,7 +65,63 @@ export default async function SettingsPage({
         <FlashBanner kind="red">{describeError(params.error)}</FlashBanner>
       )}
 
-      <Section title="Gmail">
+      <Section title="Mailbox (v1.1.2)">
+        {mailbox ? (
+          <div className="space-y-3">
+            <div>
+              <span className="text-sm text-gray-500">Connected via: </span>
+              <span className="text-sm font-medium text-gray-900">
+                {mailbox.kind === "oauth"
+                  ? "Gmail OAuth (Power mode)"
+                  : "SMTP App Password (Easy mode)"}
+              </span>
+            </div>
+            <div>
+              <span className="text-sm text-gray-500">Email: </span>
+              <span className="text-sm font-medium text-gray-900">
+                {mailbox.emailAddress}
+              </span>
+            </div>
+            {mailbox.kind === "app_password" && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                Reply polling (IMAP) activates in v1.1.2.5. Sends work now;
+                check your Gmail inbox manually for replies until then.
+              </div>
+            )}
+            <div className="flex gap-2">
+              <Link
+                href="/setup/mailbox"
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Reconnect / switch mode
+              </Link>
+              <form action={disconnectMailboxAction}>
+                <button
+                  type="submit"
+                  className="rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50"
+                >
+                  Disconnect mailbox
+                </button>
+              </form>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-gray-600">
+              No mailbox connected. Pick Easy (SMTP App Password) or Power
+              (Google OAuth).
+            </p>
+            <Link
+              href="/setup/mailbox"
+              className="inline-block rounded-md bg-gray-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-black"
+            >
+              Connect mailbox →
+            </Link>
+          </div>
+        )}
+      </Section>
+
+      <Section title="Gmail (legacy OAuth path)">
         {oauth ? (
           <div className="space-y-3">
             <div>
