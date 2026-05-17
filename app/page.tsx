@@ -1,7 +1,9 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getAppConfig } from "@/lib/app-config";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { getRubric } from "@/lib/voice/calibrate";
+import { getDraftCount } from "@/lib/draft/persist";
 
 function relativeTime(iso: string): string {
   const then = new Date(iso).getTime();
@@ -41,16 +43,51 @@ export default async function HomePage() {
     redirect("/setup/voice");
   }
 
+  // Draft count — cheap select. Soft-fails to null if Supabase isn't
+  // available; we render "—" in that case so the page still works.
+  const draftCount = await getDraftCount();
+
   return (
-    <main className="min-h-dvh flex items-center justify-center px-6">
-      <div className="max-w-xl text-center">
-        <h1 className="text-5xl font-semibold tracking-tight">{cfg.name}</h1>
-        <p className="mt-4 text-lg text-gray-600">Setup complete.</p>
-        <p className="mt-2 text-sm text-gray-500">
-          Validated {relativeTime(cfg.validatedAt)}.
-        </p>
-        <p className="mt-10 text-sm text-gray-400">
-          v0.3 — OpenRouter LLM + voice calibration
+    <main className="min-h-dvh px-6 py-12">
+      <div className="mx-auto max-w-3xl">
+        <header>
+          <h1 className="text-4xl font-semibold tracking-tight">{cfg.name}</h1>
+          <p className="mt-2 text-sm text-gray-500">
+            Setup complete · validated {relativeTime(cfg.validatedAt)}
+          </p>
+        </header>
+
+        <section className="mt-10 grid gap-4 sm:grid-cols-2">
+          <Link
+            href="/draft"
+            className="group rounded-2xl border border-gray-200 bg-white p-6 shadow-sm hover:border-gray-900 transition-colors"
+          >
+            <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              Drafter
+            </div>
+            <div className="mt-1 text-lg font-medium text-gray-900 group-hover:underline">
+              Draft an email →
+            </div>
+            <p className="mt-2 text-sm text-gray-600">
+              Type a prospect&rsquo;s name + company. Tay drafts in your voice.
+            </p>
+          </Link>
+
+          <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+            <div className="text-xs font-medium uppercase tracking-wide text-gray-500">
+              Drafts saved
+            </div>
+            <div className="mt-1 text-3xl font-semibold text-gray-900">
+              {draftCount ?? "—"}
+            </div>
+            <p className="mt-2 text-sm text-gray-600">
+              Across all prospects, all time.
+            </p>
+          </div>
+        </section>
+
+        <p className="mt-10 text-center text-xs text-gray-400">
+          v0.4 — drafter v1 (OpenRouter + voice rubric)
         </p>
       </div>
     </main>

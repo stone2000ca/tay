@@ -23,11 +23,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.3 — OpenRouter LLM + voice calibration
+## Status: v0.4 — drafter v1 (OpenRouter + voice rubric)
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.3 pivots the LLM seam from the Anthropic SDK to [OpenRouter](https://openrouter.ai) (one key, any model) and ships voice calibration — paste 5 of your own sample outbound emails at `/setup/voice` and Tay extracts a stylistic rubric (opener style, sentence length, formality, signature, common/avoid phrases). The rubric is the contract the v0.4 drafter and v0.5 judge will enforce.
+v0.4 ships the first drafter — type a prospect&rsquo;s name + company at `/draft` and Tay generates an email using your calibrated voice rubric (via OpenRouter `MODELS.quality`). Drafts persist to Supabase with the rubric snapshot + prompt inputs so v0.5 can re-judge them. Every body gets the AI-disclosure footer appended (Tay gate C). NO send, NO judge gate, NO audit log yet — those are v0.5/v0.6.
 
 ## Env vars
 
