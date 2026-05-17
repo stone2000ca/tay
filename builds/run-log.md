@@ -362,6 +362,39 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #011 — (awaiting user direction)
+## Run #011 — 2026-05-17 (~46 min including fix-pass) — **v1.1.1** (first post-1.0)
 
-Per the v1.0 ship-gate semantics in `skills/tay-build/SKILL.md`: the next `/tay-build` invocation will surface the complete merged-milestone list + open TODOs + recommended next steps and WAIT for explicit user direction. Tay does not auto-start v1.x work.
+**Milestone:** v1.1.1 — secrets foundation + provider-agnostic LLM keys + VERCEL_URL auto-detection
+**PR:** [#22](https://github.com/stone2000ca/tay/pull/22) — squashed as `ad39d163`
+**Judge:** first NEEDS-FIXES → fix-pass → APPROVED. Final Process 4/5, Product 4/5.
+
+### What landed
+- Migration 0011: `instance_secrets` (single-row, HKDF-salt + encrypted LLM key + provider + fingerprint)
+- `lib/secrets/derive.ts` + `lib/secrets/llm-key.ts` (HKDF-SHA256, race-safe bootstrap, per-purpose info strings)
+- `lib/oauth/crypto.ts` + `lib/unsubscribe/token.ts` refactored to async
+- `lib/llm.ts` rewritten — multi-provider via key prefix detection; discriminated union; chatComplete adapter
+- `@anthropic-ai/sdk` re-added for direct-Anthropic path
+- Cold-start guards on all 5 LLM callers
+- New `/setup/llm-key` wizard step; `/setup` is name-only
+- New `/settings/secrets` page
+- `lib/site-url.ts` for VERCEL_URL fallback
+- Cron route uses `process.env.CRON_SECRET` directly (Vercel auto-sets); timingSafeEqual; 503 vs 401 distinction
+- AuditAction extended with `secrets.*`
+- 421 unit + 10 journey tests
+
+### Notable
+- **First post-1.0 milestone.** All 7 Tay gates still functional; JOURNEYS regression contract intact through the async-crypto refactor.
+- Judge caught a real structural issue first pass: HKDF-derived CRON_SECRET can't match what Vercel Cron auto-sets via env. Reverted to direct env read. Cleaner anyway.
+- Anthropic-direct path adds a new SDK seam — adapter handles message-shape differences; system message gets "Output ONLY JSON" suffix when `response_format: json_object` requested (Anthropic doesn't have that flag natively).
+
+### v1.1.2 carry-forward
+- The OpenRouter key in `.env.local` (from earlier session) can smoke-test the OpenRouter branch of new multi-provider `lib/llm.ts`; Anthropic-direct + OpenAI-direct branches stay mock-only
+
+### Detailed checkpoint
+`builds/checkpoints/run-011-2026-05-17.md`
+
+---
+
+## Run #012 — (not yet started)
+
+Next invocation picks up v1.1.2 — SMTP send (Easy mode). User chooses SMTP App Password or Google OAuth at wizard mailbox step. SMTP path uses nodemailer + STARTTLS verification. Reply polling for SMTP mode lands in v1.1.2.5 (interim banner makes the limitation visible).
