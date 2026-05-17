@@ -8,12 +8,16 @@ type ChainResult = { data?: unknown; error?: { message: string } | null };
 
 class FakeQuery {
   result: ChainResult = { data: null, error: null };
-  captured: { op?: string; payload?: unknown } = {};
+  captured: { op?: string; payload?: unknown; opts?: unknown } = {};
   select() {
     return this;
   }
   insert(row: unknown) {
     this.captured = { op: "insert", payload: row };
+    return this;
+  }
+  upsert(row: unknown, opts?: unknown) {
+    this.captured = { op: "upsert", payload: row, opts };
     return this;
   }
   update(row: unknown) {
@@ -111,11 +115,9 @@ afterEach(() => {
 });
 
 describe("saveGoogleOAuth", () => {
-  test("encrypts both tokens and inserts", async () => {
-    const delQ = freshQuery();
-    delQ.result = { data: null, error: null };
-    const insQ = freshQuery();
-    insQ.result = { data: null, error: null };
+  test("encrypts both tokens and upserts with deterministic single-row id", async () => {
+    const upQ = freshQuery();
+    upQ.result = { data: null, error: null };
 
     const { saveGoogleOAuth } = await import("./persist");
     await saveGoogleOAuth({
@@ -126,15 +128,68 @@ describe("saveGoogleOAuth", () => {
       scope: "https://www.googleapis.com/auth/gmail.send",
     });
 
-    expect(delQ.captured.op).toBe("delete");
-    expect(insQ.captured.op).toBe("insert");
-    const row = insQ.captured.payload as Record<string, unknown>;
+    expect(upQ.captured.op).toBe("upsert");
+    const row = upQ.captured.payload as Record<string, unknown>;
+    // Deterministic single-row id pinned by v0.8 refactor.
+    expect(row.id).toBe("00000000-0000-0000-0000-000000000001");
     expect(row.email_address).toBe("jane@example.com");
     expect(row.scopes).toBe("https://www.googleapis.com/auth/gmail.send");
     // Ciphertext MUST NOT contain the plaintext substrings.
     expect(String(row.refresh_token_encrypted)).not.toContain("rt-plain");
     expect(String(row.access_token_encrypted)).not.toContain("at-plain");
     expect(typeof row.access_token_expires_at).toBe("string");
+    // Conflict target is `id`.
+    expect(upQ.captured.opts).toEqual({ onConflict: "id" });
+  });
+
+  test("upsert handles 'row missing' (insert path) and 'row exists' (update path) identically", async () => {
+    // Two consecutive saves should both call upsert; the DB-side semantics
+    // are insert-or-update, which the mock can't truly differentiate, but
+    // we assert the SAME call shape is produced both times. The atomicity
+    // guarantee is at the SQL layer.
+    const upQ1 = freshQuery();
+    upQ1.result = { data: null, error: null };
+    const upQ2 = freshQuery();
+    upQ2.result = { data: null, error: null };
+
+    const { saveGoogleOAuth } = await import("./persist");
+    await saveGoogleOAuth({
+      emailAddress: "a@x.co",
+      accessToken: "a1",
+      refreshToken: "r1",
+      expiresIn: 60,
+      scope: "s",
+    });
+    await saveGoogleOAuth({
+      emailAddress: "b@x.co",
+      accessToken: "a2",
+      refreshToken: "r2",
+      expiresIn: 60,
+      scope: "s",
+    });
+    expect(upQ1.captured.op).toBe("upsert");
+    expect(upQ2.captured.op).toBe("upsert");
+    expect((upQ1.captured.payload as Record<string, unknown>).id).toBe(
+      "00000000-0000-0000-0000-000000000001",
+    );
+    expect((upQ2.captured.payload as Record<string, unknown>).id).toBe(
+      "00000000-0000-0000-0000-000000000001",
+    );
+  });
+
+  test("throws on upsert DB error", async () => {
+    const upQ = freshQuery();
+    upQ.result = { data: null, error: { message: "constraint X" } };
+    const { saveGoogleOAuth } = await import("./persist");
+    await expect(
+      saveGoogleOAuth({
+        emailAddress: "j",
+        accessToken: "a",
+        refreshToken: "r",
+        expiresIn: 60,
+        scope: "x",
+      }),
+    ).rejects.toThrow(/constraint X/);
   });
 
   test("throws when Supabase env missing", async () => {

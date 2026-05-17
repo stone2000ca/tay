@@ -24,11 +24,11 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.7 — Gmail OAuth + send path
+## Status: v0.8 — Suppression list + unsubscribe handling
 
 This is the early-access build. The setup wizard, judge, drafter, suppression list, and audit log land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
 
-v0.7 is the first PR where Tay actually emits to the outside world. You connect your own Gmail (scope: `gmail.send` only, no read). Drafts the judge marked `allow` show in `/queue`. Click Send and Tay calls Gmail's API directly — your tokens, your account, your data. Every send writes a `sent_messages` row, appends to the audit log (`send.sent`), and records a trust event (`send` / `sent`). OAuth tokens are encrypted at rest with AES-256-GCM under a key you set in `TAY_OAUTH_SECRET` (32 bytes hex); without that key, the OAuth flow refuses to start. Suppression check (`lib/suppression/check.ts`) is a stub that always returns false in v0.7 — v0.8 wires the real list.
+v0.8 makes Tay gate E (suppression) load-bearing: a real `suppression` table, real `isSuppressed()` check (safe-default `true` on uncertainty — Tay under-sends rather than over-sends to a possibly-suppressed prospect), and a per-recipient unsubscribe link injected into every new draft's footer. The unsubscribe link is an HMAC-signed token (uses the same `TAY_OAUTH_SECRET` as v0.7's encryption); clicking it adds the recipient to the suppression list AND appends a `user.unsubscribed` audit event. Manage the list under Settings → Suppression. v0.7 carry-forwards: DB-level UNIQUE constraint on `sent_messages.draft_id` (backstops the orchestrator's race), `sendDraftAction` now redirects with `?error=` on failure (user sees a banner), `saveGoogleOAuth` refactored to atomic UPSERT, and `subject` joined the audit redactor's protected-key list.
 
 ## Env vars
 

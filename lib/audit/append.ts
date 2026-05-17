@@ -13,7 +13,7 @@
 // failure must never block the user's send path. The chain-break, if it
 // happens, is surfaced by the verifier (lib/audit/verify.ts) on demand.
 //
-// REDACTOR POLICY DECISION (Approach A — wide matcher, v0.6):
+// REDACTOR POLICY DECISION (Approach A — wide matcher, v0.6, extended v0.8):
 // The v0.5 stub's redactor had drift between its header doc ("redacts
 // email/body/raw") and its matcher (only api_key/secret/token/password).
 // v0.6 closes the drift by EXPANDING the matcher to cover the bodies
@@ -22,6 +22,12 @@
 // `raw_message` payloads. Each protected key has a parameterized test
 // asserting the redaction fires. Callers are still EXPECTED to
 // pre-redact — this layer is belt-and-braces.
+//
+// v0.8 addition: `subject` joins the protected list. Subjects in cold-
+// outbound can carry prospect-identifying info ("Quick question about
+// your team at Acme") — same PII concern as bodies. The send.sent
+// caller deliberately passes the subject knowing the redactor will
+// mask it on the way to disk.
 //
 // Concurrency caveat: v0.6 is single-tenant single-user. Two parallel
 // `appendAudit` calls could race on `prev_hash` (both read the same
@@ -42,7 +48,10 @@ export type AuditAction =
   | "suppression.added"
   // v0.7 additions — OAuth connect/disconnect.
   | "oauth.connected"
-  | "oauth.disconnected";
+  | "oauth.disconnected"
+  // v0.8 additions — suppression list management + unsubscribe.
+  | "suppression.removed"
+  | "user.unsubscribed";
 
 export type AuditEvent = {
   action: AuditAction;
@@ -170,6 +179,9 @@ const PROTECTED_KEY_FRAGMENTS = [
   "raw_body",
   "raw",
   "prospect_email",
+  // v0.8: subjects carry prospect-identifying info (company names,
+  // first names, deal context). Same PII concern as bodies.
+  "subject",
 ] as const;
 
 function isProtectedKey(key: string): boolean {

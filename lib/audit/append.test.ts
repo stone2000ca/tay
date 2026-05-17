@@ -116,6 +116,10 @@ describe("redactPayload", () => {
     "body",
     "raw_body",
     "raw",
+    // v0.8: subjects can leak prospect-identifying info.
+    "subject",
+    "email_subject",
+    "Subject",
   ];
 
   for (const key of PROTECTED_KEYS) {
@@ -314,13 +318,20 @@ describe("appendAudit — continuation case", () => {
     const { appendAudit } = await import("./append");
     await appendAudit({
       action: "send.sent",
-      payload: { to_email: "alice@example.com", subject: "Hi" },
+      payload: {
+        to_email: "alice@example.com",
+        subject: "Hi Acme — quick question",
+        draftId: "d-1",
+      },
     });
 
     const captured = insertQ.capturedInsert as {
       payload: Record<string, unknown>;
     };
     expect(captured.payload.to_email).toBe("[redacted]");
-    expect(captured.payload.subject).toBe("Hi");
+    // v0.8: subjects join the protected list.
+    expect(captured.payload.subject).toBe("[redacted]");
+    // Operational metadata is unredacted.
+    expect(captured.payload.draftId).toBe("d-1");
   });
 });

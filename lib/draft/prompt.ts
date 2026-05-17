@@ -17,6 +17,16 @@ export type ProspectInputs = {
   full_name: string;
   company: string;
   notes?: string;
+  /**
+   * Optional recipient email. v0.4 didn't collect this from the UI (the
+   * placeholder `.invalid` address blocks sends), but the field is here
+   * so the drafter can pass it to `withDisclosure` for a per-recipient
+   * unsubscribe link when a real address is present (v0.8+ inbound
+   * routes that supply an email — e.g. /draft form with email field —
+   * benefit automatically without re-plumbing). Never rendered into the
+   * LLM prompt — only used by the disclosure footer.
+   */
+  email?: string;
 };
 
 export type DraftMessages = {

@@ -152,6 +152,32 @@ CREATE TABLE IF NOT EXISTS trust_events (
 CREATE INDEX IF NOT EXISTS trust_events_capability_event_type_idx
   ON trust_events (capability, event_type);
 `,
+  "0008_suppression_and_constraints.sql": `
+-- v0.8 suppression list (Tay gate E load-bearing)
+CREATE TABLE IF NOT EXISTS suppression (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  email_lower text NOT NULL UNIQUE,
+  reason text NOT NULL CHECK (reason IN ('user_unsubscribe','bounce','complaint','manual_add')),
+  source text NOT NULL,
+  added_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS suppression_added_at_idx ON suppression (added_at DESC);
+
+-- v0.7 carry-forward #1: backstop orchestrator's already-sent race with
+-- DB-level UNIQUE constraint on sent_messages.draft_id. Wrapped in a
+-- DO block so the ALTER is idempotent (re-runs are no-ops once the
+-- constraint exists).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'sent_messages_draft_id_unique'
+  ) THEN
+    ALTER TABLE sent_messages
+      ADD CONSTRAINT sent_messages_draft_id_unique UNIQUE (draft_id);
+  END IF;
+END$$;
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -286,6 +312,14 @@ function sentinelFor(file: string): Sentinel {
       // this migration (sent_messages — trust_events is also unique to
       // 0007 but sent_messages is the more semantically central one).
       return { kind: "table", table: "sent_messages" };
+    case "0008_suppression_and_constraints.sql":
+      // 0008 creates the suppression table AND adds a UNIQUE constraint
+      // to sent_messages. The suppression table is the strictly-stronger
+      // signal: if it exists, this migration ran. The constraint-add is
+      // already idempotent via the DO block, so re-running the SQL when
+      // the constraint exists but the table somehow doesn't would still
+      // be safe.
+      return { kind: "table", table: "suppression" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.

@@ -106,11 +106,27 @@ export async function generateDraft(args: {
     ok: true,
     draft: {
       subject: draft.subject,
-      body: withDisclosure(draft.body),
+      // v0.8: pass the prospect's email so the disclosure footer can
+      // include a per-recipient unsubscribe link. Falls back to the
+      // constant "Reply STOP" footer when no real email (e.g. the v0.4
+      // /draft flow's synthesized `.invalid` placeholders — which can't
+      // be sent anyway) or when TAY_OAUTH_SECRET is missing.
+      body: withDisclosure(draft.body, {
+        recipientEmail: realRecipient(args.prospect.email),
+      }),
     },
     modelUsed: model,
     rubricUsed: rubric,
   };
+}
+
+function realRecipient(email: string | undefined): string | undefined {
+  const trimmed = email?.trim();
+  if (!trimmed) return undefined;
+  // Don't mint unsubscribe tokens for synthesizer placeholders — they
+  // can never be sent and the .invalid token would just be noise.
+  if (trimmed.endsWith(".invalid")) return undefined;
+  return trimmed;
 }
 
 function validateDraftShape(

@@ -9,6 +9,7 @@
 // Read-only EXCEPT the Disconnect button, which is a server action that
 // deletes the google_oauth row + appendAudit + redirects.
 
+import Link from "next/link";
 import { hasSupabaseEnv } from "@/lib/supabase/server";
 import { hasOAuthSecret } from "@/lib/oauth/crypto";
 import { getGoogleOAuth } from "@/lib/oauth/persist";
@@ -74,6 +75,19 @@ export default async function SettingsPage({
             </a>
           </div>
         )}
+      </Section>
+
+      <Section title="Suppression list">
+        <p className="text-sm text-gray-600">
+          Emails on the suppression list never receive sends. The
+          orchestrator checks this list before every Gmail call.
+        </p>
+        <Link
+          href="/settings/suppression"
+          className="mt-3 inline-block rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Manage suppression list →
+        </Link>
       </Section>
 
       <Section title="Integration status">
