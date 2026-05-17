@@ -1,22 +1,25 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #003)
-**Current milestone:** v0.4 (next to ship)
-**Roadmap progress:** 4/10 milestones merged
+**Last updated:** 2026-05-17 (Run #004)
+**Current milestone:** v0.5 (next to ship)
+**Roadmap progress:** 5/10 milestones merged
 
 ## Currently in flight
 
-(None — run #003 closed cleanly.)
+(None — run #004 closed cleanly.)
 
 ## Next up
 
-- **v0.4: Drafter v1 — type a prospect's name + company → generated draft.**
-  - New `/draft` (or wizard step) where user enters a prospect's `full_name` + `company` (optionally a `notes` field for context)
-  - Drafter reads the `voice_calibration` rubric (from v0.3) and the prospect inputs, calls `MODELS.quality` via `lib/llm.ts`, returns a draft email (subject + body)
-  - Save the draft to a new `drafts` table (link to `prospects` row; create the prospect on-the-fly if it doesn't exist)
-  - **AI disclosure footer skeleton:** even though full disclosure-mode lookup wires in v0.5/v0.7, every draft body MUST already include the disclosure footer text (e.g. "This message was written with AI assistance."). Place is a constant in `lib/draft/disclosure.ts` for v0.5 to swap to a per-jurisdiction lookup.
-  - Tay gates: B (no special-category data in prospect schema), D (drafter enforces the rubric — formality, sentence length, common/avoid phrases all influence prompt construction), H (prospect inputs wrapped in `<untrusted_source>` blocks when fed to LLM)
-  - Out of scope this milestone: actual sending (v0.7), judge gate (v0.5), audit log writes (v0.6). v0.4 just saves the draft and displays it.
+- **v0.5: Judge v1 — 4-way decision over drafts (allow / block / revise / escalate).**
+  - New `lib/judge/` library: reads draft + rubric + (placeholder) suppression check; calls `MODELS.quality` via OpenRouter with `response_format: json_object` and a strict decision schema (`{ decision: "allow"|"block"|"revise"|"escalate", reasons: string[], rewrite?: { subject, body } }`)
+  - Wires into v0.4's `generateAndSaveDraft` flow: every draft → judge → display the decision alongside the draft
+  - New `judge_decisions` table: `(id, draft_id FK, decision, reasons jsonb, rewrite jsonb, model_used, created_at)`
+  - **AI disclosure footer:** judge MUST verify the footer is present (Tay gate C as a check, not just a write); if missing → revise
+  - **Tay gate B (special-category data):** judge MUST flag block if draft mentions race/religion/health/SO/political/biometric/genetic features about the prospect
+  - **Tay gate H (adversarial-input defenses):** draft body wrapped in `<untrusted_source>` when fed to judge; structured-output schema; defensive parse
+  - **Tay gate F (audit log, partial):** judge decisions are first-class audit events — wire `appendAudit` placeholder now (real hash chain in v0.6)
+  - Address v0.5 paper-cut targets from prior judge reviews (see "Blocked / awaiting input")
+  - Out of scope this milestone: actual sending (v0.7), real hash chain (v0.6), reply handling (v0.9)
 
 ## Blocked / awaiting input
 
@@ -25,7 +28,12 @@
 - **First-user smoke test recommended** — paste real `OPENROUTER_API_KEY`, calibrate voice, draft a sample email. If `anthropic/claude-3.5-haiku` 404s on the user's OpenRouter account, swap `VALIDATION_MODEL` to `openai/gpt-4o-mini`.
 - **Live Supabase not yet provisioned** — three migrations (0001, 0002, 0003 coming in v0.4) all unverified against real Postgres. Mitigations: idempotent CREATE IF NOT EXISTS, transactional DDL, inline-SQL fallback.
 - **Vercel project not linked to GitHub repo** — preview URLs not captured on PRs.
-- **Paper cuts to address before v0.5 ship:** `/setup/voice` should surface "Supabase not configured" banner instead of wedging in a redirect loop; define `SAMPLE_COUNT` once and import in both UI and extractor.
+- **Paper cuts to address in v0.5:**
+  - `/setup/voice` should surface "Supabase not configured" banner instead of wedging in a redirect loop (v0.3 judge)
+  - Define `SAMPLE_COUNT` once and import in both UI and extractor (v0.3 judge)
+  - Pre-flight `hasSupabaseEnv()` check in `generateAndSaveDraft` (avoid wasted LLM calls on misconfigured deploys) (v0.4 judge)
+  - Notes-field `</untrusted_source>` injection sanitizer + test (v0.4 judge)
+  - Synthesized-email edge cases: company labels like `"Acme Inc."` produce `acme-inc-.invalid` (RFC 1035 violation); unicode-different names collide (v0.4 judge — best fixed when real email field lands)
 
 ## Recent learnings
 
@@ -50,7 +58,7 @@
 | v0.1 | Setup wizard step 1 — paste Anthropic key, name your instance | MERGED | #001 (2026-05-13) | [#1](https://github.com/stone2000ca/tay/pull/1) — `1f87cf1e` |
 | v0.2 | Supabase Marketplace integration + auto-migrations + UI shell with nav | MERGED | #002 (2026-05-17) | [#3](https://github.com/stone2000ca/tay/pull/3) — `1bcf341e` |
 | v0.3 | Voice calibration — paste 5 emails, extract rubric, save to DB | MERGED | #003 (2026-05-17) | [#5](https://github.com/stone2000ca/tay/pull/5) — `27840442` |
-| v0.4 | Drafter v1 — type a prospect's name + company → generated draft | NOT_STARTED | — | — |
+| v0.4 | Drafter v1 — type a prospect's name + company → generated draft | MERGED | #004 (2026-05-17) | [#7](https://github.com/stone2000ca/tay/pull/7) — `d445d7c0` |
 | v0.5 | Judge v1 — 4-way decision over drafts | NOT_STARTED | — | — |
 | v0.6 | Audit log v1 — every draft + decision logged with hash chain | NOT_STARTED | — | — |
 | v0.7 | Gmail OAuth + send path | NOT_STARTED | — | — |
