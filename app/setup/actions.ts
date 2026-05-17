@@ -1,7 +1,7 @@
 "use server";
 
 import { setAppConfig } from "@/lib/app-config";
-import { validateApiKey } from "@/lib/anthropic";
+import { validateLlmKey } from "@/lib/llm";
 import { ensureSchema } from "@/lib/supabase/migrate";
 
 const NAME_MAX = 60;
@@ -32,10 +32,10 @@ export async function validateAndSaveSetup(input: {
   if (apiKey.length === 0) {
     return { ok: false, error: "API key is required." };
   }
-  if (!apiKey.startsWith("sk-ant-")) {
+  if (!apiKey.startsWith("sk-or-")) {
     return {
       ok: false,
-      error: "That doesn't look like an Anthropic key (should start with sk-ant-).",
+      error: "That doesn't look like an OpenRouter key (should start with sk-or-).",
     };
   }
   if (name.length === 0) {
@@ -51,7 +51,7 @@ export async function validateAndSaveSetup(input: {
     };
   }
 
-  const result = await validateApiKey(apiKey);
+  const result = await validateLlmKey(apiKey);
   if (!result.ok) {
     return { ok: false, error: result.message };
   }
