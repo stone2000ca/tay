@@ -94,7 +94,14 @@ Return ONLY the JSON object: { "subject": ..., "body": ... }`;
  * user-supplied content so an attacker cannot close our wrapping block
  * and inject sibling content the model might interpret as instructions.
  * Same defense lives in lib/judge/prompt.ts (Tay gate H).
+ *
+ * v0.6 belt-and-braces: also rewrite the OPENING tag `<untrusted_source`
+ * (with or without attributes) so an attacker can't open a fake wrapper
+ * block before injecting a fake closer. The closing tag is the real
+ * escape vector but defense-in-depth says cover both.
  */
 function neuter(s: string): string {
-  return s.replaceAll("</untrusted_source>", "[/untrusted_source]");
+  return s
+    .replaceAll("</untrusted_source>", "[/untrusted_source]")
+    .replace(/<untrusted_source\b/g, "[untrusted_source");
 }

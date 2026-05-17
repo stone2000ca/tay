@@ -109,6 +109,10 @@ CREATE INDEX IF NOT EXISTS judge_decisions_draft_id_idx
 CREATE INDEX IF NOT EXISTS judge_decisions_decision_created_at_idx
   ON judge_decisions (decision, created_at DESC);
 `,
+  "0005_audit_index.sql": `
+CREATE INDEX IF NOT EXISTS audit_log_occurred_at_idx
+  ON audit_log (occurred_at DESC, id DESC);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -157,21 +161,11 @@ async function runMigrationsOnce(): Promise<MigrateResult> {
       // entire SQL apply when it's already been run. Cheaper, and avoids
       // any unforeseen side-effects of re-running DDL.
       const sentinel = sentinelFor(file);
+      const { sql: sentinelSql, params: sentinelParams } =
+        sentinelQuery(sentinel);
       const existsRes = await client.query<{ exists: boolean }>(
-        sentinel.kind === "table"
-          ? `SELECT EXISTS (
-               SELECT 1 FROM information_schema.tables
-               WHERE table_schema = 'public' AND table_name = $1
-             ) AS exists`
-          : `SELECT EXISTS (
-               SELECT 1 FROM information_schema.columns
-               WHERE table_schema = 'public'
-                 AND table_name = $1
-                 AND column_name = $2
-             ) AS exists`,
-        sentinel.kind === "table"
-          ? [sentinel.table]
-          : [sentinel.table, sentinel.column],
+        sentinelSql,
+        sentinelParams,
       );
       if (existsRes.rows[0]?.exists) {
         continue;
@@ -214,7 +208,8 @@ async function runMigrationsOnce(): Promise<MigrateResult> {
 
 type Sentinel =
   | { kind: "table"; table: string }
-  | { kind: "column"; table: string; column: string };
+  | { kind: "column"; table: string; column: string }
+  | { kind: "index"; index: string };
 
 /**
  * Sentinel for each migration. Pick evidence that the migration ran:
@@ -240,11 +235,50 @@ function sentinelFor(file: string): Sentinel {
       return { kind: "column", table: "prospects", column: "notes" };
     case "0004_judge_decisions.sql":
       return { kind: "table", table: "judge_decisions" };
+    case "0005_audit_index.sql":
+      // 0005 is index-only — the audit_log TABLE already exists from
+      // 0001 so a table sentinel would say "already there" and skip
+      // the index. Check for the index itself.
+      return { kind: "index", index: "audit_log_occurred_at_idx" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.
       return { kind: "table", table: `__tay_unknown_${file}` };
   }
+}
+
+function sentinelQuery(sentinel: Sentinel): {
+  sql: string;
+  params: string[];
+} {
+  if (sentinel.kind === "table") {
+    return {
+      sql: `SELECT EXISTS (
+              SELECT 1 FROM information_schema.tables
+              WHERE table_schema = 'public' AND table_name = $1
+            ) AS exists`,
+      params: [sentinel.table],
+    };
+  }
+  if (sentinel.kind === "column") {
+    return {
+      sql: `SELECT EXISTS (
+              SELECT 1 FROM information_schema.columns
+              WHERE table_schema = 'public'
+                AND table_name = $1
+                AND column_name = $2
+            ) AS exists`,
+      params: [sentinel.table, sentinel.column],
+    };
+  }
+  // kind === "index" — pg_indexes is the canonical place to look.
+  return {
+    sql: `SELECT EXISTS (
+            SELECT 1 FROM pg_indexes
+            WHERE schemaname = 'public' AND indexname = $1
+          ) AS exists`,
+    params: [sentinel.index],
+  };
 }
 
 async function loadMigrationSql(file: string): Promise<string> {
