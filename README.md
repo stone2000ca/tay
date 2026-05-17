@@ -24,11 +24,25 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v0.9 — Reply handler (inbound poll + threaded LLM classification)
+## Status: v1.0 — production-ready (post-discovery; pre-customer)
 
-This is the early-access build. The setup wizard, judge, drafter, suppression list, audit log, and now reply ingestion land PR by PR. Roadmap in [PLAN.md](./PLAN.md).
+This is the v0.x ship gate. After v1.0, Tay is feature-complete for the v0.x cycle. Future work is gated on explicit user direction (the `/tay-build` orchestrator surfaces "awaiting user direction" on the next invocation). Roadmap in [PLAN.md](./PLAN.md).
 
-v0.9 closes the loop: Tay polls Gmail every 5 minutes (Vercel Cron → `/api/cron/poll-gmail`) for new inbound replies, classifies each reply's intent via an LLM (`interested` / `not_interested` / `out_of_office` / `unsubscribe_request` / `other`) under HARD adversarial-input defenses (Tay gate H — `<untrusted_source>` wrapping, neuter() rewriting, system-prompt instruction-ignore directive, `response_format: json_object`, hard schema validator), records trust events per outcome, auto-suppresses on `unsubscribe_request`, and — only when the user explicitly enables it under Settings — auto-drafts a reply for `interested` messages. Auto-reply is OFF by default; enabling it is recorded as a trust event. View ingested replies + classifications at `/replies`. Re-consent on Gmail is required for pre-v0.9 connections (the new scope is `gmail.readonly` alongside the existing `gmail.send`). v0.8 carry-forwards: bad-kind unsubscribe-token reject test, `console.warn` on disclosure token-generation failure, static import for suppression helpers in `/u/[token]`, and a deterministic read-before-upsert (replaces the 5-second age heuristic) for the replay-click UX.
+v1.0 lands three things together:
+
+- **JOURNEYS eval suite** — adversarial-scenario regression corpus that locks in the 7 Tay gates (B/C/D/E/F/H/I). 10 scenarios covering: cold-draft happy path, prompt injection in prospect notes, special-category mention (gate B), disclosure footer regression (gate C), rubric drift (gate D), send to suppressed prospect (gate E), audit hash chain integrity (gate F), two adversarial-reply variants (gate H), and trust-tier promotion (gate I). Run via `npm run test:journeys`; on green the suite prints `*** JOURNEYS GREEN ***`. The suite is the regression contract for v1.x — break a gate, break a scenario.
+- **Trust-tier promotion** — `lib/trust/tier.ts` reads `trust_events` and computes a per-capability tier (`tier_0` / `tier_1` / `tier_2` / `tier_3`). Auto-promotion stops at `tier_2`; `tier_3` is manual-only. Thresholds default to 25 clean sends → `tier_1`, 250 clean / ≤2 incidents → `tier_2` for the `send` capability. 5+ incidents in 30 days demote one tier. View and recompute per capability at `/settings/trust`.
+- **v0.9 polling robustness fixes** — Gmail poll cursor now advances using the `historyId` returned by the History API response itself (no second `getProfile()` call — eliminates the race window where new mail could arrive between list and profile and be marked already-seen). `gmail_poll_cursor` is constrained to a single row via a deterministic `SINGLE_ROW_ID` + `lock_col` UNIQUE constraint. Reply handler: unmatched threads now persist a `<unmatched-thread>` sentinel body (privacy + storage); self-sent outbound short-circuits classifier; auto-draft reply hydrates the real prospect record into the drafter's prompt inputs.
+
+### Run the JOURNEYS suite
+
+```bash
+npm run test:journeys
+```
+
+Runs `vitest run journeys` — the 10 adversarial scenarios + an aggregated summary banner. Mocks the OpenAI SDK + Supabase server client + audit/trust writers; tests the PIPELINE WIRING, not the LLM itself. Green = the 7 Tay gates' wiring still holds.
+
+`npm test` runs the full unit-test suite AND the JOURNEYS harness (both pick up `*.test.ts`).
 
 ## Env vars
 

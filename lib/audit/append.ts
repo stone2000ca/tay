@@ -57,7 +57,10 @@ export type AuditAction =
   | "reply.classified"
   | "reply.draft_generated"
   // v0.9 — explicit user toggle for auto-reply (trust-tier decision).
-  | "reply.auto_reply_toggled";
+  | "reply.auto_reply_toggled"
+  // v1.0 — trust-tier promotion/demotion events (Tay gate I).
+  | "trust.tier_changed"
+  | "trust.manual_override_set";
 
 export type AuditEvent = {
   action: AuditAction;

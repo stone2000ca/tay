@@ -151,6 +151,20 @@ export default async function SettingsPage({
         </Link>
       </Section>
 
+      <Section title="Trust tiers (v1.0)">
+        <p className="text-sm text-gray-600">
+          Per-capability auto-promotion state. tier_0 keeps humans in the
+          loop for every action; tier_1 auto-acts on judge-allow; tier_2 is
+          audit-only; tier_3 is reserved for manual promotion.
+        </p>
+        <Link
+          href="/settings/trust"
+          className="mt-3 inline-block rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          View trust tiers →
+        </Link>
+      </Section>
+
       <Section title="Integration status">
         <ul className="space-y-2 text-sm">
           <StatusRow

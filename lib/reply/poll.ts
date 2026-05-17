@@ -1,15 +1,20 @@
-// Gmail poller — Tay v0.9.
+// Gmail poller — Tay v0.9 (v1.0 cursor robustness).
 //
 // Strategy: every 5 minutes (Vercel Cron → /api/cron/poll-gmail), we
 //   1. Read the latest `gmail_poll_cursor`.last_history_id.
 //   2. If absent → first poll. Call getProfile() to fetch the current
 //      historyId and seed the cursor. NO BACKFILL — re-processing old
 //      replies as new would fire trust events for inbound messages we
-//      already handled (or never wanted to). Document tradeoff.
-//   3. If present → list new message IDs since cursor via History API.
+//      already handled (or never wanted to).
+//   3. If present → list new message IDs since cursor via History API
+//      AND capture the History API response's top-level `historyId`
+//      (v1.0 fix — no more second getProfile() call which raced).
 //   4. For each new message: getMessage(), filter to "in a thread we
-//      sent", call handleReply().
-//   5. Update the cursor to the new historyId only on overall success.
+//      sent", short-circuit on Tay's own outbound (self-email),
+//      call handleReply().
+//   5. Advance the cursor to the historyId returned by the History API
+//      response (NOT a fresh getProfile() call — that races) using
+//      the SINGLE_ROW_ID + lock_col upsert pattern.
 //
 // READ-VS-WRITE: poller is a SCHEDULED WRITE pipeline. NEVER throws.
 // Errors return in the result counts. The cron route fires-and-forgets
@@ -25,13 +30,23 @@ import {
 import {
   getMessage,
   getProfile,
-  getRecentMessages,
+  getRecentMessagesWithHistoryId,
 } from "../oauth/google";
 import { ensureFreshAccessToken } from "../oauth/persist";
 import { handleReply } from "./handle";
 
 const CURSOR_TABLE = "gmail_poll_cursor";
 const SENT_TABLE = "sent_messages";
+
+/**
+ * Deterministic single-row id for gmail_poll_cursor. Combined with the
+ * `lock_col` UNIQUE constraint added in migration 0010, this guarantees
+ * the table has at most one row. v0.9 used random UUIDs + .neq("id","");
+ * v1.0 swaps to upsert(onConflict=lock_col) for a cleaner contract.
+ */
+export const POLL_CURSOR_SINGLE_ROW_ID =
+  "00000000-0000-0000-0000-000000000001";
+const POLL_CURSOR_LOCK_VALUE = 1;
 
 export type PollResult = {
   processed: number;
@@ -80,11 +95,11 @@ export async function pollGmail(): Promise<PollResult> {
   if (!cursor) {
     try {
       const profile = await getProfile({ accessToken });
-      const ins = await supabase
-        .from(CURSOR_TABLE)
-        .insert({ last_history_id: profile.historyId });
-      if (ins.error) {
-        console.warn("[poll] cursor seed failed:", ins.error.message);
+      // v1.0: seed with the SINGLE_ROW_ID + lock_col upsert so any
+      // pre-v1.0 leftover rows get coalesced into the canonical one.
+      const ups = await upsertCursorRow(supabase, profile.historyId);
+      if (ups.error) {
+        console.warn("[poll] cursor seed failed:", ups.error.message);
         result.errors++;
       } else {
         console.log(
@@ -101,10 +116,24 @@ export async function pollGmail(): Promise<PollResult> {
     return result;
   }
 
-  // -- Delta listing -----------------------------------------------------
-  let refs: Awaited<ReturnType<typeof getRecentMessages>>;
+  // -- v1.0: capture the connected email ONCE per poll for self-filter
+  let connectedEmail = "";
   try {
-    refs = await getRecentMessages({
+    const profile = await getProfile({ accessToken });
+    connectedEmail = (profile.emailAddress ?? "").toLowerCase();
+  } catch (err) {
+    // Soft-fail: if we can't fetch the profile, we skip the self-filter
+    // optimization but the handleReply dedupe still protects correctness.
+    console.warn(
+      "[poll] profile fetch failed (self-filter disabled this run):",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+
+  // -- Delta listing (and capture latest historyId from response) -------
+  let historyResult: Awaited<ReturnType<typeof getRecentMessagesWithHistoryId>>;
+  try {
+    historyResult = await getRecentMessagesWithHistoryId({
       accessToken,
       after: cursor.last_history_id,
     });
@@ -116,8 +145,19 @@ export async function pollGmail(): Promise<PollResult> {
     result.errors++;
     return result;
   }
+  const refs = historyResult.refs;
 
   if (refs.length === 0) {
+    // Still advance the cursor if Google reported a newer historyId
+    // (Gmail bumps historyId on labels/reads/etc., not only inbound
+    // mail; we want to skip past those next time so we don't re-list).
+    if (historyResult.historyId && historyResult.historyId !== cursor.last_history_id) {
+      const ups = await upsertCursorRow(supabase, historyResult.historyId);
+      if (ups.error) {
+        console.warn("[poll] cursor advance (empty) failed:", ups.error.message);
+        result.errors++;
+      }
+    }
     console.log("[poll] no new messages");
     return result;
   }
@@ -145,7 +185,6 @@ export async function pollGmail(): Promise<PollResult> {
   );
 
   // -- Per-message processing -------------------------------------------
-  let latestHistoryId = cursor.last_history_id;
   for (const ref of refs) {
     if (!ourThreads.has(ref.threadId)) {
       result.skipped++;
@@ -153,14 +192,18 @@ export async function pollGmail(): Promise<PollResult> {
     }
     try {
       const msg = await getMessage({ accessToken, id: ref.id });
-      // Skip our own SENT messages — they show up in the history feed.
-      // The dedupe in handleReply would catch them via UNIQUE on
-      // gmail_message_id (because send.orchestrate writes sent_messages
-      // separately, not replies), but skipping early saves an LLM call.
-      // The cheapest signal: if the message's `from` matches the
-      // sent_messages.recipient_email of nothing, it's likely our own
-      // outbound. We can't know our own address cheaply here, so we
-      // rely on dedupe — but the body is at least intact.
+      const fromLower = parseFromAddress(msg.from).toLowerCase();
+
+      // v1.0 carry-forward: short-circuit on Tay's own outbound. The
+      // History API returns ALL added messages including our own SENT
+      // messages. Without this filter, every send would also trigger a
+      // classifier LLM call against our own message (wasted spend +
+      // potential dedupe-key collision in handleReply).
+      if (connectedEmail && fromLower === connectedEmail) {
+        result.skipped++;
+        continue;
+      }
+
       const r = await handleReply({
         gmailMessageId: msg.id,
         gmailThreadId: msg.threadId,
@@ -185,22 +228,16 @@ export async function pollGmail(): Promise<PollResult> {
   }
 
   // -- Advance cursor ----------------------------------------------------
-  // Use the latest historyId we observed. Gmail's history endpoint
-  // returns a top-level `historyId` in the response, but our wrapper
-  // doesn't expose it — for v0.9 we fetch the profile again to get the
-  // current value. Costs one extra HTTP call per poll; cheap.
+  // v1.0: use the historyId from the History API response itself (no
+  // second getProfile() call — eliminates the race window where a
+  // message could land between our list call and the profile fetch and
+  // get marked "already processed" forever).
+  const nextHistoryId =
+    historyResult.historyId ?? cursor.last_history_id;
   try {
-    const profile = await getProfile({ accessToken });
-    latestHistoryId = profile.historyId;
-    const upd = await supabase
-      .from(CURSOR_TABLE)
-      .update({
-        last_history_id: latestHistoryId,
-        updated_at: new Date().toISOString(),
-      })
-      .neq("id", "");
-    if (upd.error) {
-      console.warn("[poll] cursor advance failed:", upd.error.message);
+    const ups = await upsertCursorRow(supabase, nextHistoryId);
+    if (ups.error) {
+      console.warn("[poll] cursor advance failed:", ups.error.message);
       result.errors++;
     }
   } catch (err) {
@@ -215,6 +252,28 @@ export async function pollGmail(): Promise<PollResult> {
     `[poll] processed=${result.processed} skipped=${result.skipped} errors=${result.errors}`,
   );
   return result;
+}
+
+/**
+ * Upsert the (one and only) gmail_poll_cursor row. Keyed on `lock_col`
+ * (UNIQUE per migration 0010) — guarantees at most one row exists.
+ *
+ * Returns the supabase chain result so callers can read `error`.
+ */
+async function upsertCursorRow(
+  supabase: ReturnType<typeof getSupabaseServerClient>,
+  historyId: string,
+): Promise<{ error: { message: string } | null }> {
+  const result = await supabase.from(CURSOR_TABLE).upsert(
+    {
+      id: POLL_CURSOR_SINGLE_ROW_ID,
+      lock_col: POLL_CURSOR_LOCK_VALUE,
+      last_history_id: historyId,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "lock_col" },
+  );
+  return { error: result.error ?? null };
 }
 
 /**
