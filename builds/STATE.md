@@ -1,31 +1,32 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #008)
-**Current milestone:** v0.9 (next to ship)
-**Roadmap progress:** 9/10 milestones merged
+**Last updated:** 2026-05-17 (Run #009)
+**Current milestone:** v1.0 (next to ship — SHIP GATE)
+**Roadmap progress:** 10/10 build milestones merged; v1.0 ship gate remains
 
 ## Currently in flight
 
-(None — run #008 closed cleanly.)
+(None — run #009 closed cleanly. v1.0 ship gate next.)
 
-## Next up
+## Next up — v1.0 SHIP GATE
 
-- **v0.9: Reply handler — inbound webhook + threaded LLM.**
-  - Gmail read scope added to OAuth flow (Tay only had `gmail.send` in v0.7 — needs `gmail.readonly` or `gmail.modify` for reply ingestion). Existing v0.7 connected users must re-consent.
-  - Inbound channel: TWO options — Gmail Push (Pub/Sub) needs Google Cloud Pub/Sub setup; alternative is polling via Vercel Cron (every ~5 min). v0.9 ships polling (zero external infra) with header comment noting Push as v1.0 candidate.
-  - New `replies` table: `(id, thread_id FK gmail_thread, from_email, subject, body, received_at, classified_intent)`
-  - New `lib/reply/classify.ts` — LLM call (cheap model) classifying reply intent: `interested` / `not_interested` / `out_of_office` / `unsubscribe_request` / `other`. Structured output schema with hard validator. Tay gate H: reply body wrapped in `<untrusted_source>` — replies are FULLY attacker-controlled.
-  - `lib/reply/handle.ts` orchestrator:
-    1. Match reply to a `sent_messages` row by thread_id
-    2. Record trust event (`replied_positive` / `replied_negative` / etc.)
-    3. If `unsubscribe_request` → `addSuppression({ reason: "user_unsubscribe", source: "reply-detector" })` + audit
-    4. If `out_of_office` → no further action (don't auto-reply to OOOs)
-    5. If `interested` AND trust tier allows AND not suppressed → generate a reply draft via existing drafter+judge stack
-    6. If reply gen → save to `drafts` with `kind: "reply"` (extend drafts schema with `parent_message_id` nullable FK)
-  - `/replies` page (server component) — table of recent replies + classifications + trust outcomes
-  - Address v0.8 observations: read-before-upsert on `/u/[token]`; add bad-kind token-reject test; console.warn on disclosure token-generation throw; static import for listSuppressions
-  - **CAUTION:** auto-reply on interested replies BURNS through the trust-tier system — v0.9 ships with auto-reply DISABLED by default (UI toggle in /settings); user opts in. v1.0's JOURNEYS suite validates the auto-reply path before it can be tier-promoted.
-  - Out of scope: actual booking flow (out of build scope); JOURNEYS eval suite (v1.0).
+- **v1.0: JOURNEYS eval suite + trust-tier promotion live.** The ship gate.
+  - **JOURNEYS eval suite** — adversarial-scenario test corpus, run via vitest or a dedicated runner:
+    - Each journey is a JSON or TS scenario: { name, prospect_inputs, sample_emails, expected_classifier_outputs, expected_judge_decisions, expected_trust_events }
+    - Scenarios cover: cold draft happy path; prompt-injection in prospect notes; special-category mention in notes (gate B); disclosure-footer regression (gate C); rubric drift (gate D); send to suppressed prospect (gate E); audit-chain integrity (gate F); adversarial reply (gate H); auto-reply tier-promotion path (gate I)
+    - Run as `npm run test:journeys` (separate from unit tests; can be slow); CI badge in README
+    - Each scenario asserts the FULL pipeline produces the expected output (mock LLM with canned responses; real validators / parsers / persistence layer)
+  - **Trust-tier promotion** — `lib/trust/tier.ts`:
+    - Read `trust_events` and compute per-capability tier from event counts: tier_0 (always human-approved) → tier_1 (auto on judge-allow) → tier_2 (auto with retroactive audit only) → tier_3 (rare, autonomous)
+    - Promotion logic: count `sent` events minus `bounced` / `complained` / `replied_negative` for `send` capability; promote at thresholds (e.g. 25 sent + 0 incidents → tier_1; 250 sent + ≤2 incidents → tier_2)
+    - `getTrustTier(capability): Promise<TrustTier>` reader; `recomputeTrustTier(capability)` writer (also writes audit on promotion)
+    - `/settings/trust` page: shows current tier per capability + counts + "promote / demote" manual override
+  - **Roll up v0.9 polling robustness** (the 2 medium issues from v0.9 judge):
+    - Cursor advance race fix: track historyId from the history-list response, not getProfile()
+    - gmail_poll_cursor single-row constraint: deterministic SINGLE_ROW_ID + UNIQUE
+  - **v1.0 ship gate behavior** — after v1.0 PR merges:
+    - STATE.md transitions to "v1.0 complete. Awaiting user kickoff for post-1.0 work."
+    - /tay-build's next invocation surfaces all merged milestones + open TODOs + recommended next steps and WAITS for explicit user direction. Does not auto-start "v1.x".
   - Replace `lib/audit/append.ts` stub with the real implementation:
     - Read `prev_hash` from latest `audit_log` row (sha256 hex, 64 chars; `prev_hash = null` for first row)
     - Compute `this_hash = sha256(prev_hash + canonical_json(payload) + occurred_at_iso + action)`
@@ -80,7 +81,7 @@
 | v0.6 | Audit log v1 — every draft + decision logged with hash chain | MERGED | #006 (2026-05-17) | [#11](https://github.com/stone2000ca/tay/pull/11) — `39f5c93d` |
 | v0.7 | Gmail OAuth + send path | MERGED | #007 (2026-05-17) | [#13](https://github.com/stone2000ca/tay/pull/13) — `d839b071` |
 | v0.8 | Suppression list + unsubscribe handling | MERGED | #008 (2026-05-17) | [#15](https://github.com/stone2000ca/tay/pull/15) — `85f591a9` |
-| v0.9 | Reply handler — inbound webhook + threaded LLM | NOT_STARTED | — | — |
+| v0.9 | Reply handler — inbound webhook + threaded LLM | MERGED | #009 (2026-05-17) | [#17](https://github.com/stone2000ca/tay/pull/17) — `b1e24da7` |
 | v1.0 | JOURNEYS eval suite green; trust-tier promotion live | NOT_STARTED | — | — |
 
 ## Strategic pivots logged

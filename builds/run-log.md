@@ -279,6 +279,40 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #009 — (not yet started)
+## Run #009 — 2026-05-17 (~32 min)
 
-Next invocation picks up v0.9 — Reply handler (inbound webhook + threaded LLM). Listens for Gmail replies via push notification or polling; LLM classifies (positive/negative/oof/needs-human); records trust events; if positive intent + autonomous tier, drafts a follow-up via the same drafter+judge stack.
+**Milestone:** v0.9 — Reply handler + v0.8 carry-forwards
+**PR:** [#17](https://github.com/stone2000ca/tay/pull/17) — squashed as `b1e24da7`
+**Judge:** Process 5/5, Product 4/5 — APPROVED
+
+### What landed
+- Migration 0009: replies + gmail_poll_cursor + reply_settings + drafts.reply_to_id
+- OAuth scope extended (gmail.readonly added); 3 new Gmail API helpers
+- `lib/reply/{classify,poll,handle,draft,settings}.ts` + tests
+- `/api/cron/poll-gmail` with CRON_SECRET bearer-auth
+- `/replies` page + `/settings` toggle + reconnect banner
+- v0.8 carry-forwards all closed
+- 339/339 tests
+- Agent committed before declaring done (process improvement applied)
+
+### Notable
+- Tay gate H most load-bearing in v0.x. Six stacked defenses on classifier.
+- Auto-reply OFF by default.
+- Judge: defense layering "exemplary."
+
+### v1.0 carry-forwards (6 non-blocking, 2 medium)
+1. Cursor advance race in poll.ts (small window where messages get dropped)
+2. gmail_poll_cursor single-row enforcement
+3. Reply body persisted before unmatched-thread skip
+4. Classifier burns on Tay's own outbound messages
+5. Composed reply drafter passes empty prospect fields to judge
+6. Settings page render honesty (verify autoReplyEnabled rendered)
+
+### Detailed checkpoint
+`builds/checkpoints/run-009-2026-05-17.md`
+
+---
+
+## Run #010 — (not yet started)
+
+Next invocation picks up v1.0 — the SHIP GATE. JOURNEYS eval suite + trust-tier promotion live. Rolls up v0.9 polling robustness fixes. After v1.0 merges + JOURNEYS suite is green + trust-tier promotion verified, /tay-build surfaces "v1.0 complete. Awaiting user kickoff for post-1.0 work." and waits.
