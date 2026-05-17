@@ -5,6 +5,7 @@ Per-run process + product scores from the judge agent. Trend table for spotting 
 | Run # | Date | Milestone | Status | Process | Product | Notable |
 |---|---|---|---|---|---|---|
 | 001 | 2026-05-13 | v0.1 setup wizard step 1 | MERGED | 4/5 | 4/5 | Agent didn't commit before declaring done; missing tests on SDK error-mapping seam; cookie `secure: true` will infinite-loop localhost dev |
+| 002 | 2026-05-17 | v0.2 Supabase + auto-migrations + UI shell | MERGED | 4/5 | 4/5 | Judge flagged cold-start race on `/setup` POST — fixed in-PR (`9c5786e`). Live-DB verification gap (no Supabase project linked); inline-SQL fallback + transactional DDL mitigate. Cookie `secure` fix from run #001 escalation landed. `next lint` dead-script dropped. |
 
 ---
 
