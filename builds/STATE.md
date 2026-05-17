@@ -1,23 +1,29 @@
 # Tay Build — Current State
 
-**Last updated:** 2026-05-17 (Run #006)
-**Current milestone:** v0.7 (next to ship)
-**Roadmap progress:** 7/10 milestones merged
+**Last updated:** 2026-05-17 (Run #007)
+**Current milestone:** v0.8 (next to ship)
+**Roadmap progress:** 8/10 milestones merged
 
 ## Currently in flight
 
-(None — run #006 closed cleanly.)
+(None — run #007 closed cleanly.)
 
 ## Next up
 
-- **v0.7: Gmail OAuth + send path — review queue → send → audit log.**
-  - Google OAuth 2.0 flow: `/api/auth/google/start` → consent → `/api/auth/google/callback` → store refresh token in `google_oauth` table (single-row per install; service-role key encrypts at rest if Supabase Vault available, else stored encrypted at app-level with a `TAY_OAUTH_SECRET` env var — agent's call). Scope: `https://www.googleapis.com/auth/gmail.send` only (no read; v0.9 adds read for replies).
-  - New `/queue` page (NEW): lists drafts where judge decision = `allow` (or `revise` accepted by user) and not yet sent. Each row: prospect + subject + body preview + "Send" button. On click: server action → `lib/send/gmail.ts` → POST to Gmail API → record `sent_messages` row → `appendAudit({ action: "send.sent", payload: {...} })` → `recordTrustEvent("send", "sent", {...})` (Tay gate I — first appearance).
-  - **Suppression check stub:** `lib/suppression/check.ts` — exports `isSuppressed(email): Promise<boolean>` that always returns `false` for v0.7. v0.8 implements the real list. EVERY send path MUST call this BEFORE Gmail API (Tay gate E).
-  - **Trust-tier infrastructure:** new `lib/trust/record.ts` with `recordTrustEvent(capability, eventType, metadata)`. v0.7 implementation: writes to a new `trust_events` table. v1.0 wires the tier-promotion logic.
-  - Tay gates ALL active for first time. Defense layers stack.
-  - Out of scope: actual auto-send queue (v1.0); reply handling (v0.9); the user manually clicks "Send" per draft in v0.7.
-  - v0.7 carry-forwards from v0.6 judge: hash domain separator polish (optional); AuditVerifyResult shape cleanup (optional).
+- **v0.8: Suppression list + unsubscribe handling.**
+  - New `suppression` table (email, reason, added_at, source). Reason enum: `user_unsubscribe`, `bounce`, `complaint`, `manual_add`.
+  - Real `lib/suppression/check.ts:isSuppressed(email)` — case-insensitive lookup; soft-fails to TRUE on read error (per v0.7 stub header note — safer to under-send than over-send).
+  - `lib/suppression/add.ts:addSuppression({ email, reason, source }): Promise<void>` — write contract; idempotent (upsert by lowercased email).
+  - Unsubscribe URL in the disclosure footer: `withDisclosure()` updates to inject a per-recipient unsubscribe link (`${NEXT_PUBLIC_SITE_URL}/u/<token>` where token is a signed `recipient_email:expires` HMAC).
+  - `app/u/[token]/page.tsx` — verifies token, shows "You are unsubscribed" confirmation, calls `addSuppression({ reason: "user_unsubscribe" })`.
+  - Suppression management UI: `/settings/suppression` — list current entries + manual-add form + remove button.
+  - Address v0.7 carry-forwards:
+    1. Add `ALTER TABLE sent_messages ADD CONSTRAINT sent_messages_draft_id_unique UNIQUE(draft_id)` migration to backstop the orchestrator's read-then-write race
+    2. Fix `sendDraftAction` to redirect with `?error=...` on failure
+    3. Wrap `saveGoogleOAuth` DELETE+INSERT in a transaction
+    4. Add `subject` to audit redactor matcher list (or document why deliberately not)
+  - Tay gate E now FULLY LIVE (real list with safe-fail default).
+  - Out of scope: reply handling (v0.9); bounce/complaint webhook integration with Gmail or external ESP (v0.9 or later).
   - Replace `lib/audit/append.ts` stub with the real implementation:
     - Read `prev_hash` from latest `audit_log` row (sha256 hex, 64 chars; `prev_hash = null` for first row)
     - Compute `this_hash = sha256(prev_hash + canonical_json(payload) + occurred_at_iso + action)`
@@ -70,7 +76,7 @@
 | v0.4 | Drafter v1 — type a prospect's name + company → generated draft | MERGED | #004 (2026-05-17) | [#7](https://github.com/stone2000ca/tay/pull/7) — `d445d7c0` |
 | v0.5 | Judge v1 — 4-way decision over drafts | MERGED | #005 (2026-05-17) | [#9](https://github.com/stone2000ca/tay/pull/9) — `d0aab4d1` |
 | v0.6 | Audit log v1 — every draft + decision logged with hash chain | MERGED | #006 (2026-05-17) | [#11](https://github.com/stone2000ca/tay/pull/11) — `39f5c93d` |
-| v0.7 | Gmail OAuth + send path | NOT_STARTED | — | — |
+| v0.7 | Gmail OAuth + send path | MERGED | #007 (2026-05-17) | [#13](https://github.com/stone2000ca/tay/pull/13) — `d839b071` |
 | v0.8 | Suppression list + unsubscribe handling | NOT_STARTED | — | — |
 | v0.9 | Reply handler — inbound webhook + threaded LLM | NOT_STARTED | — | — |
 | v1.0 | JOURNEYS eval suite green; trust-tier promotion live | NOT_STARTED | — | — |

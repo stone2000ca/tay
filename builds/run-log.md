@@ -212,6 +212,40 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #007 — (not yet started)
+## Run #007 — 2026-05-17 (~24 min)
 
-Next invocation picks up v0.7 — Gmail OAuth + send path. First milestone where Tay actually emits to a third party. Tay gates ALL active: B (no special-cat in send metadata), C (disclosure footer required in sent body — judge already enforces), D (rubric already enforced upstream), E (suppression — stub `isSuppressed()` always-false; v0.8 wires the real list), F (audit log writes `send.sent` events), H (Gmail thread/header inputs treated as untrusted on reply parsing), I (trust-tier writes — `recordTrustEvent("send", "sent", ...)` first appears).
+**Milestone:** v0.7 Gmail OAuth + send path
+**Status transition:** NOT_STARTED → MERGED
+**PR:** [#13](https://github.com/stone2000ca/tay/pull/13) — squashed as `d839b071`
+**Judge:** Process 5/5, Product 4/5 — APPROVED
+
+### What landed
+- Migrations 0006 (google_oauth) + 0007 (sent_messages + trust_events)
+- `lib/oauth/{crypto,google,persist}.ts` — AES-256-GCM + raw-fetch OAuth + encrypt-at-rest
+- `/api/auth/google/{start,callback}` — CSRF state cookie + state validation before code exchange
+- `lib/suppression/check.ts` (stub) + `lib/trust/record.ts` + `lib/send/{gmail,orchestrate}.ts`
+- `/queue` (per-row send actions, degraded-state matrix) + `/settings` (status dots + connect/disconnect)
+- All 7 Tay gates active for the first time
+- 216/216 tests (added 30+)
+
+### Notable
+- **THE LOAD-BEARING EMISSION MILESTONE.** Every console.log audited; log-probe test asserts recipient/subject/body/token never appear in error output.
+- Orchestrator gate ordering test (isSuppressed → ensureFreshAccessToken → sendEmail) locks the invariant.
+- Tay rule "never log raw OAuth tokens or recipient emails" verified at every seam.
+- Judge: "the most carefully-engineered PR in the build."
+
+### v0.8 carry-forwards (non-blocking)
+1. `sent_messages.draft_id` needs UNIQUE constraint to backstop the orchestrator's read-then-write race (real risk: two browser tabs → double-send)
+2. `sendDraftAction` silent-failure: redirect with `?error=` instead of console.warn + revalidatePath
+3. `saveGoogleOAuth` DELETE+INSERT should be wrapped in a transaction
+4. Subject field not in audit redactor matcher (consistent with "callers must pre-redact" but worth a pass)
+5. Suppression stub returns false — v0.8's real impl MUST default to TRUE on read error per the header note
+
+### Detailed checkpoint
+`builds/checkpoints/run-007-2026-05-17.md`
+
+---
+
+## Run #008 — (not yet started)
+
+Next invocation picks up v0.8 — Suppression list + unsubscribe handling. Real `isSuppressed()` against a `suppression` table; unsubscribe webhook endpoint; bounce/complaint handling; address v0.7 carry-forwards.
