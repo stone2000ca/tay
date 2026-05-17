@@ -185,6 +185,33 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #006 — (not yet started)
+## Run #006 — 2026-05-17 (~20 min)
 
-Next invocation will pick up v0.6 (Audit log v1 — every draft/decision logged with hash chain). Replace `appendAudit` stub with sha256 chain: read prev_hash from latest row, compute `this_hash = sha256(prev_hash + json(payload) + occurred_at)`, insert atomically. Add `/api/audit/verify` endpoint returning chain integrity. Address the 3 v0.5 flags. Tay gate F finally fully live.
+**Milestone:** v0.6 — Audit log v1 (sha256 hash chain) + v0.5 carry-forwards
+**Status transition:** NOT_STARTED → MERGED
+**PR:** [#11](https://github.com/stone2000ca/tay/pull/11) — squashed as `39f5c93d`
+**Judge:** Process 5/5, Product 4/5 — APPROVED
+
+### What landed
+- `lib/audit/hash.ts` (pure): `computeHash`, recursive `canonicalJson`, `NULL_PREV_HASH_SENTINEL`
+- `lib/audit/append.ts` rewritten — public API preserved; never throws; redacts before hashing
+- `lib/audit/verify.ts` — chain walker with discriminated `hash_mismatch` / `prev_hash_mismatch` / `supabase_unavailable` / `read_error`
+- `GET /api/audit/verify` + `/audit` page (server component; nav link)
+- Migration `0005_audit_index.sql` (`audit_log_occurred_at_idx`) with new `index` sentinel kind
+- v0.5 carry-forwards cleared: redactor expanded (email/body/raw/raw_body/prospect_email + per-key test); neuter opener belt-and-braces; sanitizeReasons doc-comment
+- 143/143 tests
+
+### Notable
+- **Tay gate F NOW FULLY LIVE.** Every Tier-3 judge decision writes a tamper-evident row.
+- Hash determinism: verifier and writer import the same `computeHash`; canonical JSON sorts keys recursively; NULL sentinel for first row.
+- Concurrency: two parallel `appendAudit` calls could break the chain (documented); single-tenant + verifier surfaces the break as `prev_hash_mismatch`.
+- Judge gave 4/5 product for two cosmetic v0.7+ polishes (hash domain separator; AuditVerifyResult shape).
+
+### Detailed checkpoint
+`builds/checkpoints/run-006-2026-05-17.md`
+
+---
+
+## Run #007 — (not yet started)
+
+Next invocation picks up v0.7 — Gmail OAuth + send path. First milestone where Tay actually emits to a third party. Tay gates ALL active: B (no special-cat in send metadata), C (disclosure footer required in sent body — judge already enforces), D (rubric already enforced upstream), E (suppression — stub `isSuppressed()` always-false; v0.8 wires the real list), F (audit log writes `send.sent` events), H (Gmail thread/header inputs treated as untrusted on reply parsing), I (trust-tier writes — `recordTrustEvent("send", "sent", ...)` first appears).
