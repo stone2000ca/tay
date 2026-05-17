@@ -55,6 +55,17 @@ export type TrustEntry = {
   metadata: Record<string, unknown>;
 };
 
+export type SendEmailCall = {
+  to: string;
+  subject: string;
+  body: string;
+  accessToken?: string;
+};
+
+export type SendEmailProgrammed =
+  | { ok: true; gmailMessageId: string; gmailThreadId: string }
+  | { ok: false; error: string };
+
 export class MockController {
   // -- LLM ----------------------------------------------------------------
   private llmResponses: LlmResponseInput[] = [];
@@ -137,6 +148,31 @@ export class MockController {
     return this._trustEvents;
   }
 
+  // -- sendEmail (Gmail API stub) ----------------------------------------
+  // Used by the send-to-suppressed-prospect journey to assert that the
+  // Gmail send path is NEVER called when the recipient is suppressed.
+  // Scenarios that want to simulate a successful (or failing) send push
+  // a programmed result; scenarios that gate BEFORE send leave it empty
+  // and assert `sendEmailCalls().length === 0`.
+  private _sendEmailCalls: SendEmailCall[] = [];
+  private sendEmailResults: SendEmailProgrammed[] = [];
+
+  recordSendEmailCall(call: SendEmailCall): void {
+    this._sendEmailCalls.push(call);
+  }
+
+  sendEmailCalls(): ReadonlyArray<SendEmailCall> {
+    return this._sendEmailCalls;
+  }
+
+  pushSendEmailResult(r: SendEmailProgrammed): void {
+    this.sendEmailResults.push(r);
+  }
+
+  takeSendEmailResult(): SendEmailProgrammed | undefined {
+    return this.sendEmailResults.shift();
+  }
+
   // -- Reset --------------------------------------------------------------
   reset(): void {
     this.llmResponses.length = 0;
@@ -145,6 +181,8 @@ export class MockController {
     this._dbWrites.length = 0;
     this._audits.length = 0;
     this._trustEvents.length = 0;
+    this._sendEmailCalls.length = 0;
+    this.sendEmailResults.length = 0;
   }
 }
 

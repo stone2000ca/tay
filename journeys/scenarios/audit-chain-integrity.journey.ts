@@ -1,15 +1,28 @@
-// JOURNEY — gate F: audit hash chain integrity.
+// JOURNEY — gate F: audit hash chain integrity via verifyAuditChain.
 //
-// Builds a 3-row chain in memory using the REAL computeHash function,
-// then tampers with row 2's payload and re-walks the chain. The
-// verifier MUST report `ok: false` and identify the broken row.
+// This is the SOLE gate-F regression journey, so it must exercise the
+// REAL `verifyAuditChain` against a programmed Supabase result set.
+// Anything less and the gate has no actual regression coverage.
 //
-// This exercises the load-bearing crypto — `appendAudit` and
-// `verifyAuditChain` are mocked in the JOURNEYS test boundary, but the
-// hash math itself is pure and re-used here.
+// Strategy:
+//   1. Build a 3-row chain in memory using the REAL `computeHash` —
+//      identical to how `appendAudit` would write it.
+//   2. Program the mocked Supabase client (FakeChain in factories.ts)
+//      to return those rows from `.from("audit_log").select(...)`.
+//   3. Call the REAL `verifyAuditChain` from lib/audit/verify.ts.
+//      Assert { ok: true, totalRows: 3, lastHash: <row3.this_hash> }.
+//   4. TAMPER with row 2's payload WITHOUT recomputing its this_hash.
+//      Call verifyAuditChain again — must report
+//      { ok: false, brokenAt: { id: 2, reason: "hash_mismatch" } }.
+//   5. Also exercise the prev_hash_mismatch path: break row 3's prev_hash
+//      and assert reason="prev_hash_mismatch", brokenAt.id=3.
+//
+// The journey runs three verifyAuditChain calls in `run()` and the
+// assertions check all three outcomes.
 
 import type { Journey, JourneyResult } from "../types";
 import { computeHash } from "../../lib/audit/hash";
+import { verifyAuditChain } from "../../lib/audit/verify";
 
 type Row = {
   id: number;
@@ -49,67 +62,123 @@ function buildChain(): Row[] {
   return rows;
 }
 
-function walkChain(
-  rows: Row[],
-): { ok: true } | { ok: false; brokenAt: number; reason: string } {
-  let prev: string | null = null;
-  for (const row of rows) {
-    if (row.prev_hash !== prev) {
-      return { ok: false, brokenAt: row.id, reason: "prev_hash_mismatch" };
-    }
-    const expected = computeHash({
-      prev_hash: row.prev_hash,
-      payload: row.payload,
-      occurred_at: row.occurred_at,
-      action: row.action,
-    });
-    if (expected !== row.this_hash) {
-      return { ok: false, brokenAt: row.id, reason: "hash_mismatch" };
-    }
-    prev = row.this_hash;
-  }
-  return { ok: true };
-}
-
 export const journey: Journey = {
-  name: "audit chain integrity",
+  name: "audit chain integrity via verifyAuditChain",
   gate: "F",
   description:
-    "Tamper with row 2's payload; verifyAuditChain returns ok:false brokenAt:2.",
-  setup: async () => {
-    /* no LLM, no DB — pure crypto */
+    "Real verifyAuditChain on a programmed Supabase result set: clean chain ok; tampered payload → hash_mismatch; broken prev_hash → prev_hash_mismatch.",
+  setup: async (mc) => {
+    // We program THREE distinct Supabase reads — one per verifyAuditChain
+    // invocation in run(). Each pops a fresh result keyed on the
+    // audit_log table. The FakeChain's terminating `.then()` matches by
+    // table (method optional in popDbResult), so we push table-only.
+    const cleanChain = buildChain();
+
+    // Result 1: untampered chain → verifier returns ok:true.
+    mc.pushDbResult(
+      { table: "audit_log" },
+      { data: cleanChain, error: null },
+    );
+
+    // Result 2: same chain but row 2's payload tampered with (this_hash
+    // left as the original). Verifier MUST flag hash_mismatch on id=2.
+    const tamperedChain = buildChain();
+    tamperedChain[1] = {
+      ...tamperedChain[1],
+      payload: { draftId: "d1", decision: "block" }, // changed from allow
+    };
+    mc.pushDbResult(
+      { table: "audit_log" },
+      { data: tamperedChain, error: null },
+    );
+
+    // Result 3: chain where row 3's prev_hash is wrong. Verifier MUST
+    // flag prev_hash_mismatch on id=3.
+    const brokenLinkChain = buildChain();
+    brokenLinkChain[2] = {
+      ...brokenLinkChain[2],
+      prev_hash: "0".repeat(64),
+    };
+    mc.pushDbResult(
+      { table: "audit_log" },
+      { data: brokenLinkChain, error: null },
+    );
   },
   run: async (): Promise<JourneyResult> => {
-    const chain = buildChain();
-    // First: an untampered walk must pass.
-    const cleanWalk = walkChain(chain);
-    if (!cleanWalk.ok) {
-      return {
-        kind: "error",
-        message: `clean chain failed walk: ${cleanWalk.reason}`,
-      };
-    }
-    // Tamper with row 2's payload (mutate the in-memory object).
-    chain[1].payload = { draftId: "d1", decision: "block" };
-    const tamperedWalk = walkChain(chain);
+    const cleanChain = buildChain();
+    const expectedLastHash = cleanChain[2].this_hash;
+
+    const r1 = await verifyAuditChain();
+    const r2 = await verifyAuditChain();
+    const r3 = await verifyAuditChain();
+
     return {
       kind: "ok",
-      data: tamperedWalk,
+      data: {
+        clean: r1 as unknown as Record<string, unknown>,
+        tampered: r2 as unknown as Record<string, unknown>,
+        brokenLink: r3 as unknown as Record<string, unknown>,
+        expectedLastHash,
+      },
     };
   },
   assertions: (result) => {
     if (result.kind !== "ok") {
       throw new Error(`expected ok, got: ${(result as { message: string }).message}`);
     }
-    const d = result.data as Record<string, unknown>;
-    if (d.ok !== false) {
-      throw new Error("tampered chain unexpectedly passed walk");
+    const data = result.data as Record<string, unknown>;
+    const clean = data.clean as { ok: boolean; totalRows: number; lastHash: string };
+    const tampered = data.tampered as {
+      ok: boolean;
+      brokenAt?: { id: number; reason: string };
+    };
+    const brokenLink = data.brokenLink as {
+      ok: boolean;
+      brokenAt?: { id: number; reason: string };
+    };
+    const expectedLastHash = data.expectedLastHash as string;
+
+    // Clean chain assertions
+    if (clean.ok !== true) {
+      throw new Error(`clean chain expected ok:true, got ${JSON.stringify(clean)}`);
     }
-    if (d.brokenAt !== 2) {
-      throw new Error(`expected brokenAt=2, got ${d.brokenAt}`);
+    if (clean.totalRows !== 3) {
+      throw new Error(`clean chain expected totalRows=3, got ${clean.totalRows}`);
     }
-    if (d.reason !== "hash_mismatch") {
-      throw new Error(`expected reason=hash_mismatch, got ${d.reason}`);
+    if (clean.lastHash !== expectedLastHash) {
+      throw new Error(
+        `clean chain lastHash mismatch: expected ${expectedLastHash}, got ${clean.lastHash}`,
+      );
+    }
+
+    // Tampered chain assertions
+    if (tampered.ok !== false) {
+      throw new Error("tampered chain unexpectedly passed verifier");
+    }
+    if (tampered.brokenAt?.id !== 2) {
+      throw new Error(
+        `tampered chain expected brokenAt.id=2, got ${tampered.brokenAt?.id}`,
+      );
+    }
+    if (tampered.brokenAt?.reason !== "hash_mismatch") {
+      throw new Error(
+        `tampered chain expected reason=hash_mismatch, got ${tampered.brokenAt?.reason}`,
+      );
+    }
+
+    // Broken-link chain assertions
+    if (brokenLink.ok !== false) {
+      throw new Error("broken-link chain unexpectedly passed verifier");
+    }
+    if (brokenLink.brokenAt?.id !== 3) {
+      throw new Error(
+        `broken-link chain expected brokenAt.id=3, got ${brokenLink.brokenAt?.id}`,
+      );
+    }
+    if (brokenLink.brokenAt?.reason !== "prev_hash_mismatch") {
+      throw new Error(
+        `broken-link chain expected reason=prev_hash_mismatch, got ${brokenLink.brokenAt?.reason}`,
+      );
     }
   },
 };

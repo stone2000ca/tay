@@ -212,3 +212,105 @@ export function makeVoiceCalibrateMock(rubric: unknown): Record<string, unknown>
     getRubric: async () => rubric,
   };
 }
+
+// -- send orchestrator collaborators -----------------------------------
+//
+// The send-to-suppressed-prospect journey exercises the REAL
+// `lib/send/orchestrate.ts:sendDraft` to verify the gate-E suppression
+// short-circuit. That requires stubs for every collaborator the
+// orchestrator pulls in. Scenarios that don't touch sendDraft can ignore
+// these — the journey is the only caller that programs them.
+//
+// All stubs are pop-from-controller so the same singleton controller
+// stays the source of programmed truth across scenarios.
+
+// app-config — always returns a valid AppConfig so the precondition passes.
+export function makeAppConfigMock(): Record<string, unknown> {
+  return {
+    getAppConfig: async () => ({
+      name: "Tay",
+      validatedAt: "2026-05-17T00:00:00.000Z",
+    }),
+  };
+}
+
+// voice/calibrate — always returns a fixture rubric so the precondition
+// passes. Tests that want a missing rubric should mock at scenario level
+// (none currently do; voice rubric is exercised in rubric-drift-formality
+// via the drafter LLM, not via getRubric).
+export function makeVoiceCalibrateModuleMock(): Record<string, unknown> {
+  return {
+    getRubric: async () => ({
+      opener_style: "personalized first-name + observation",
+      avg_sentence_length_words: 14,
+      formality: "casual",
+      signature_pattern: "First name only",
+      common_phrases: [],
+      avoid_phrases: [],
+      tone_notes: "",
+    }),
+  };
+}
+
+// judge/persist — returns the most recent decision the scenario pushed
+// via mockController.pushDbResult({ table: "judge_decisions", method: "getLatestDecisionForDraft" }, ...).
+// Defaults to a clean "allow" so suppression/oauth/gmail gates are the
+// ones exercised (rather than the orchestrator short-circuiting on judge).
+export function makeJudgePersistMock(): Record<string, unknown> {
+  return {
+    getLatestDecisionForDraft: async (draftId: string) => {
+      void draftId;
+      const r = mockController.popDbResult(
+        "judge_decisions",
+        "getLatestDecisionForDraft",
+      );
+      if (r && r.data !== undefined) return r.data;
+      return { decision: "allow", reasons: ["ok"] };
+    },
+  };
+}
+
+// oauth/persist — fakes ensureFreshAccessToken. By default returns a
+// dummy token; scenarios can pushDbResult({ table: "oauth", method: "ensureFreshAccessToken" }, { data: <token-string-or-error> })
+// to override. Throws on `error` to mirror the real contract.
+export function makeOAuthPersistMock(): Record<string, unknown> {
+  return {
+    ensureFreshAccessToken: async () => {
+      const r = mockController.popDbResult("oauth", "ensureFreshAccessToken");
+      if (r?.error) {
+        throw new Error(r.error.message);
+      }
+      return (r?.data as string | undefined) ?? "fake-access-token";
+    },
+  };
+}
+
+// send/gmail — captures every call and pops a programmed result. If no
+// result programmed, returns a default success — but scenarios that
+// expect Gmail to NEVER be called (e.g. suppression) can assert via
+// mockController.sendEmailCalls().length === 0.
+export function makeGmailSendMock(): Record<string, unknown> {
+  return {
+    sendEmail: async (args: {
+      accessToken: string;
+      to: string;
+      subject: string;
+      body: string;
+    }) => {
+      mockController.recordSendEmailCall({
+        to: args.to,
+        subject: args.subject,
+        body: args.body,
+        accessToken: args.accessToken,
+      });
+      const programmed = mockController.takeSendEmailResult();
+      return (
+        programmed ?? {
+          ok: true,
+          gmailMessageId: "gm-fake-1",
+          gmailThreadId: "gt-fake-1",
+        }
+      );
+    },
+  };
+}

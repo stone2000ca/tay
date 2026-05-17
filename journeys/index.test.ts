@@ -12,11 +12,16 @@
 import { afterAll, beforeAll, beforeEach, describe, test, vi } from "vitest";
 
 import {
+  makeAppConfigMock,
   makeAuditMock,
+  makeGmailSendMock,
+  makeJudgePersistMock,
+  makeOAuthPersistMock,
   makeOpenAiMock,
   makeSupabaseMock,
   makeSuppressionCheckMock,
   makeTrustRecordMock,
+  makeVoiceCalibrateModuleMock,
 } from "./mocks/factories";
 import { mockController } from "./mocks/controller";
 
@@ -39,6 +44,22 @@ vi.mock("../lib/trust/record", async () => {
 });
 vi.mock("@/lib/suppression/check", () => makeSuppressionCheckMock());
 vi.mock("../lib/suppression/check", () => makeSuppressionCheckMock());
+
+// Send-orchestrator collaborators — only the send-to-suppressed-prospect
+// journey programs these; other journeys ignore them. Mocks default to
+// "happy path" values so any journey importing sendDraft won't crash on
+// a missing precondition; suppression-specific control is exerted in
+// that journey's setup().
+vi.mock("@/lib/app-config", () => makeAppConfigMock());
+vi.mock("../lib/app-config", () => makeAppConfigMock());
+vi.mock("@/lib/voice/calibrate", () => makeVoiceCalibrateModuleMock());
+vi.mock("../lib/voice/calibrate", () => makeVoiceCalibrateModuleMock());
+vi.mock("@/lib/judge/persist", () => makeJudgePersistMock());
+vi.mock("../lib/judge/persist", () => makeJudgePersistMock());
+vi.mock("@/lib/oauth/persist", () => makeOAuthPersistMock());
+vi.mock("../lib/oauth/persist", () => makeOAuthPersistMock());
+vi.mock("@/lib/send/gmail", () => makeGmailSendMock());
+vi.mock("../lib/send/gmail", () => makeGmailSendMock());
 
 import { scenarios } from "./scenarios";
 import { runJourney, runAllJourneys, formatSummary } from "./runner";

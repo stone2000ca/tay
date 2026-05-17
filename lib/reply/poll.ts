@@ -16,6 +16,15 @@
 //      response (NOT a fresh getProfile() call — that races) using
 //      the SINGLE_ROW_ID + lock_col upsert pattern.
 //
+// CURSOR ADVANCE HONESTY: the cursor advance happens after the for-loop
+// UNCONDITIONALLY — it does NOT wait for each message to succeed before
+// moving past it. This is safe because each message is dedupe-INSERTed
+// (gmail_message_id UNIQUE) inside handleReply BEFORE the classifier is
+// invoked. A mid-batch handler error therefore can't "lose" the message:
+// either the dedupe insert already landed (next poll skips it on the
+// duplicate-key path) or it didn't (next poll re-processes it cleanly).
+// The cursor advance is independent of any single message's outcome.
+//
 // READ-VS-WRITE: poller is a SCHEDULED WRITE pipeline. NEVER throws.
 // Errors return in the result counts. The cron route fires-and-forgets
 // from the user's perspective.
