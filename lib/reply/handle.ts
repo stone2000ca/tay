@@ -1,9 +1,25 @@
-// Reply handler orchestrator — Tay v0.9 (LOAD-BEARING).
+// Reply handler orchestrator — Tay v0.9 / v1.1.2.5 (LOAD-BEARING).
 //
 // THIS IS THE SINGLE CHOKEPOINT for "we got an inbound reply, do the
-// right thing." The poller calls it once per new Gmail message; the
-// orchestrator owns the rest. No other code is allowed to write to the
-// `replies` table or fan out to trust / suppression on reply events.
+// right thing." The Gmail History poller (lib/reply/poll.ts) and the
+// IMAP poller (lib/reply/imap-poll.ts) both call it once per new
+// inbound message; the orchestrator owns the rest. No other code is
+// allowed to write to the `replies` table or fan out to trust /
+// suppression on reply events.
+//
+// DUAL THREAD ANCHOR (v1.1.2.5):
+//   - Gmail OAuth path: replies arrive with a real Gmail thread id; we
+//     match `sent_messages.gmail_thread_id` directly.
+//   - SMTP App Password path: SMTP has no native thread id. The IMAP
+//     poller passes `inReplyToMessageId` (parsed from the reply's
+//     In-Reply-To header) as a fallback anchor; we match
+//     `sent_messages.gmail_message_id` against it. The legacy column
+//     name is preserved across both channels per the v1.1.2 send
+//     persistence (SMTP stores its generated Message-ID there).
+//   Match precedence: gmail_thread_id first (free for OAuth), then
+//   gmail_message_id (only if the first miss + we have an
+//   inReplyToMessageId to try). Both paths converge on the same
+//   classify → audit → trust pipeline downstream.
 //
 // Numbered pipeline (each step is a numbered branch below; this comment
 // is the canonical contract):
@@ -76,7 +92,24 @@ export async function handleReply(args: {
   subject?: string;
   body: string;
   receivedAt: string;
+  /**
+   * v1.1.2.5 SMTP-channel fallback thread anchor. When the Gmail
+   * thread-id lookup misses (which is always the case for SMTP — its
+   * stored thread id is ""), we try matching `sent_messages.
+   * gmail_message_id` against this value (the parsed `In-Reply-To`
+   * header from the inbound IMAP reply).
+   * OAuth callers leave this undefined; the existing thread-id lookup
+   * succeeds first and the fallback is never reached.
+   */
+  inReplyToMessageId?: string;
+  /**
+   * v1.1.2.5 channel tag — forwarded into the reply.received audit
+   * payload (Tay gate F) so the chain records which transport saw the
+   * reply. Defaults to "oauth" for backwards-compat with v0.9 callers.
+   */
+  channel?: "oauth" | "app_password";
 }): Promise<HandleReplyResult> {
+  const channel = args.channel ?? "oauth";
   if (!hasSupabaseEnv()) {
     return {
       ok: false,
@@ -90,29 +123,58 @@ export async function handleReply(args: {
   // -- 2 PRE-EMPTIVE THREAD MATCH ---------------------------------------
   // We do the thread match BEFORE the dedupe insert so we can attach the
   // sent_message_id when we write the row (instead of a follow-up UPDATE).
-  const sentQ = await supabase
-    .from(SENT_TABLE)
-    .select("id, draft_id, prospect_id, subject, body")
-    .eq("gmail_thread_id", args.gmailThreadId)
-    .order("sent_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (sentQ.error) {
-    console.warn(
-      "[reply/handle] sent_messages lookup failed:",
-      sentQ.error.message,
-    );
+  //
+  // DUAL ANCHOR (v1.1.2.5): try Gmail thread id first; if that misses
+  // (always the case for SMTP — stored thread id is empty) AND we have
+  // an inReplyToMessageId from the inbound reply's In-Reply-To header,
+  // fall back to matching sent_messages.gmail_message_id. That column
+  // holds the Gmail message id for OAuth sends AND our generated SMTP
+  // Message-ID for SMTP sends (v1.1.2 — see lib/send/orchestrate.ts).
+  type SentRow = {
+    id: string;
+    draft_id: string;
+    prospect_id: string;
+    subject: string;
+    body: string;
+  };
+
+  let matched: SentRow | null = null;
+
+  if (args.gmailThreadId) {
+    const sentQ = await supabase
+      .from(SENT_TABLE)
+      .select("id, draft_id, prospect_id, subject, body")
+      .eq("gmail_thread_id", args.gmailThreadId)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (sentQ.error) {
+      console.warn(
+        "[reply/handle] sent_messages thread lookup failed:",
+        sentQ.error.message,
+      );
+    } else {
+      matched = (sentQ.data as SentRow | null) ?? null;
+    }
   }
-  const matched =
-    (sentQ.data as
-      | {
-          id: string;
-          draft_id: string;
-          prospect_id: string;
-          subject: string;
-          body: string;
-        }
-      | null) ?? null;
+
+  if (!matched && args.inReplyToMessageId) {
+    const fallbackQ = await supabase
+      .from(SENT_TABLE)
+      .select("id, draft_id, prospect_id, subject, body")
+      .eq("gmail_message_id", args.inReplyToMessageId)
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (fallbackQ.error) {
+      console.warn(
+        "[reply/handle] sent_messages message-id lookup failed:",
+        fallbackQ.error.message,
+      );
+    } else {
+      matched = (fallbackQ.data as SentRow | null) ?? null;
+    }
+  }
 
   // -- 1 DEDUPE -----------------------------------------------------------
   // v1.0 carry-forward: when the thread isn't ours, persist a sentinel
@@ -150,6 +212,7 @@ export async function handleReply(args: {
     await appendAudit({
       action: "reply.received",
       payload: {
+        channel,
         gmailMessageId: args.gmailMessageId,
         gmailThreadId: args.gmailThreadId,
         // email_lower is masked by the redactor (substring "email"). We
@@ -181,6 +244,7 @@ export async function handleReply(args: {
     await appendAudit({
       action: "reply.received",
       payload: {
+        channel,
         gmailMessageId: args.gmailMessageId,
         gmailThreadId: args.gmailThreadId,
         matched: true,
@@ -326,6 +390,7 @@ export async function handleReply(args: {
   await appendAudit({
     action: "reply.received",
     payload: {
+      channel,
       gmailMessageId: args.gmailMessageId,
       gmailThreadId: args.gmailThreadId,
       matched: true,

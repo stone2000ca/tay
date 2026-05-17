@@ -42,7 +42,9 @@ import {
   getRecentMessagesWithHistoryId,
 } from "../oauth/google";
 import { ensureFreshAccessToken } from "../oauth/persist";
+import { getMailboxKind } from "../mailbox/persist";
 import { handleReply } from "./handle";
+import { pollImapMailbox } from "./imap-poll";
 
 const CURSOR_TABLE = "gmail_poll_cursor";
 const SENT_TABLE = "sent_messages";
@@ -283,6 +285,47 @@ async function upsertCursorRow(
     { onConflict: "lock_col" },
   );
   return { error: result.error ?? null };
+}
+
+/**
+ * v1.1.2.5 channel dispatcher. The cron route (`/api/cron/poll-gmail`)
+ * calls this instead of `pollGmail()` directly so SMTP-mode installs
+ * also get reply polling.
+ *
+ * Dispatch:
+ *   - kind === "oauth"        → delegate to pollGmail() (v0.9 path)
+ *   - kind === "app_password" → delegate to pollImapMailbox() (v1.1.2.5)
+ *   - kind === null           → return early; no mailbox connected
+ *
+ * Both delegated functions soft-fail; this wrapper never throws. The
+ * returned `channel` tag lets the cron route log which path ran without
+ * needing to re-read the mailbox kind.
+ */
+export type PollRepliesResult = {
+  channel: "oauth" | "app_password" | "none";
+  processed: number;
+  skipped: number;
+  errors: number;
+  reason?: string;
+};
+
+export async function pollReplies(): Promise<PollRepliesResult> {
+  const kind = await getMailboxKind();
+  if (kind === "oauth") {
+    const r = await pollGmail();
+    return { channel: "oauth", ...r };
+  }
+  if (kind === "app_password") {
+    const r = await pollImapMailbox();
+    return { channel: "app_password", ...r };
+  }
+  return {
+    channel: "none",
+    processed: 0,
+    skipped: 0,
+    errors: 0,
+    reason: "no_mailbox",
+  };
 }
 
 /**

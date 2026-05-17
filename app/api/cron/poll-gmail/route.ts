@@ -1,4 +1,13 @@
-// GET /api/cron/poll-gmail — Vercel Cron trigger for v0.9 reply polling.
+// GET /api/cron/poll-gmail — Vercel Cron trigger for reply polling.
+//
+// Route-name note (v1.1.2.5): the path still says "poll-gmail" for
+// backwards-compat with the vercel.json cron config (renaming the route
+// would force every existing deploy to redeploy AND have the user touch
+// their Vercel project — friction we're explicitly avoiding). The
+// implementation now dispatches by mailbox kind: OAuth → Gmail History
+// API path (lib/reply/poll.ts:pollGmail); SMTP App Password → IMAP path
+// (lib/reply/imap-poll.ts:pollImapMailbox). pollReplies() is the
+// channel-aware wrapper.
 //
 // v1.1.1 fix-pass: the cron secret is NOT derived. Vercel Cron's auth
 // mechanism uses `process.env.CRON_SECRET` directly — Vercel auto-sets
@@ -33,7 +42,7 @@
 // Logging policy: route logs ONLY operational counts. NEVER reply bodies.
 
 import { timingSafeEqual } from "node:crypto";
-import { pollGmail } from "@/lib/reply/poll";
+import { pollReplies } from "@/lib/reply/poll";
 import { ensureSchema } from "@/lib/supabase/migrate";
 
 export const runtime = "nodejs";
@@ -88,6 +97,6 @@ export async function GET(request: Request) {
   }
 
   // -- 4. Run the poller --------------------------------------------------
-  const result = await pollGmail();
+  const result = await pollReplies();
   return Response.json(result);
 }

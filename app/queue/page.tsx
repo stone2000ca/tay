@@ -1,4 +1,4 @@
-// /queue — the v0.7 review-and-send surface (v1.1.2 channel-aware).
+// /queue — the v0.7 review-and-send surface (v1.1.2.5 channel-aware).
 //
 // Server component. Lists drafts where:
 //   - latest judge_decisions row has decision = 'allow'
@@ -8,7 +8,7 @@
 // Each row: prospect + subject + body preview + "Send" button. Send is
 // a server-action POST per row (no client JS).
 //
-// Wizard degraded-state matrix (v1.1.2):
+// Wizard degraded-state matrix (v1.1.2.5):
 //   - Supabase not configured → render SupabaseWarning + empty list.
 //   - OAuth crypto secret missing → red banner "encryption secret missing".
 //     (Still relevant for SMTP — we use the same secret to encrypt App
@@ -16,10 +16,14 @@
 //   - Mailbox not connected (neither OAuth nor SMTP) → amber banner
 //     "Mailbox not connected" pointing at Settings.
 //   - Voice rubric missing → amber banner.
-//   - SMTP-mode connected → interim "reply polling next update" banner.
 //   - No allow-able drafts → empty-state message.
 //
 // All degraded states render the page; none redirect-loop.
+//
+// v1.1.2.5 note: the v1.1.2 interim banner ("reply polling activates in
+// the next update") is REMOVED — IMAP polling is live now via
+// lib/reply/imap-poll.ts. SMTP-mode users see replies in /replies on
+// the same 5-minute cron cadence as OAuth-mode users.
 
 import Link from "next/link";
 import { SupabaseWarning } from "@/components/supabase-warning";
@@ -114,14 +118,6 @@ export default async function QueuePage({
           — the orchestrator refuses to send without one.
         </Banner>
       )}
-      {mailboxKind === "app_password" && (
-        <Banner kind="amber">
-          <strong>Reply polling activates in the next update (v1.1.2.5).</strong>{" "}
-          You can send now; replies will appear here once we add IMAP polling.
-          For now, check your Gmail inbox manually for replies.
-        </Banner>
-      )}
-
       <section className="mt-6 rounded-2xl border border-gray-200 bg-white shadow-sm">
         {rows.length === 0 ? (
           <div className="px-6 py-10 text-sm text-gray-500">
