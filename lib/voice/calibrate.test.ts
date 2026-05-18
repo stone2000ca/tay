@@ -175,11 +175,19 @@ describe("extractVoiceRubric", () => {
     }
   });
 
-  test("rejects too-few samples", async () => {
+  test("rejects too-few samples (zero)", async () => {
     const { extractVoiceRubric } = await import("./calibrate");
-    const result = await extractVoiceRubric(samples.slice(0, 2));
+    const result = await extractVoiceRubric([]);
     expect(result.ok).toBe(false);
     expect(chatCompleteMock).not.toHaveBeenCalled();
+  });
+
+  test("accepts a single sample (v1.1.3 relaxed minimum)", async () => {
+    createMock.mockResolvedValueOnce(llmResponseWith(JSON.stringify(validRubric)));
+    const { extractVoiceRubric } = await import("./calibrate");
+    const result = await extractVoiceRubric([samples[0]]);
+    expect(result.ok).toBe(true);
+    expect(chatCompleteMock).toHaveBeenCalledTimes(1);
   });
 
   test("rejects too-many samples", async () => {

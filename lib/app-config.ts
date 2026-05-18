@@ -111,6 +111,76 @@ async function clearInSupabase(): Promise<void> {
   }
 }
 
+// ---------- setup-complete helpers (v1.1.3) ----------
+//
+// Track whether the user has finished the post-rubric wizard polish
+// (rubric preview → sample draft → test-send → prospect quick-add).
+// Once true, the home page redirect chain skips the wizard sub-flow.
+//
+// READ-VS-WRITE: getSetupComplete is a soft-fail READ (false on any
+// error — same shape as getAppConfig). markSetupComplete is a WRITE
+// that throws so the caller can surface a hard error to the user.
+//
+// Cookie backend: we don't track setup-complete there. The cookie
+// fallback is for pre-Supabase installs where the post-rubric wizard
+// can't run anyway (no rubric to preview). Returns false.
+
+/**
+ * Has the user finished the v1.1.3 post-rubric wizard sub-flow?
+ * Soft-fails to false on any DB error — page render must always work.
+ */
+export async function getSetupComplete(): Promise<boolean> {
+  if (!hasSupabaseEnv()) return false;
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select("setup_complete")
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.warn(
+        "[app-config] setup_complete select failed:",
+        error.message,
+      );
+      return false;
+    }
+    return data?.setup_complete === true;
+  } catch (err) {
+    console.warn(
+      "[app-config] supabase unavailable for setup_complete:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return false;
+  }
+}
+
+/**
+ * Mark the wizard as complete. WRITE — throws on any DB error.
+ * Idempotent: re-calling on an already-complete install is a no-op
+ * (UPDATE … WHERE id IS NOT NULL hits the single row regardless).
+ */
+export async function markSetupComplete(): Promise<void> {
+  if (!hasSupabaseEnv()) {
+    throw new Error(
+      "Supabase not configured. Link your project via the Vercel Marketplace before finishing setup.",
+    );
+  }
+  const supabase = getSupabaseServerClient();
+  const upd = await supabase
+    .from(TABLE)
+    .update({
+      setup_complete: true,
+      setup_completed_at: new Date().toISOString(),
+    })
+    .not("id", "is", null);
+  if (upd.error) {
+    throw new Error(
+      `[app-config] setup_complete update failed: ${upd.error.message}`,
+    );
+  }
+}
+
 // ---------- cookie backend ----------
 
 async function getFromCookie(): Promise<AppConfig | null> {

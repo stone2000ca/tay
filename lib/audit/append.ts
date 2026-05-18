@@ -70,7 +70,14 @@ export type AuditAction =
   // stay (they were Google-OAuth-specific). New connect/disconnect
   // flows write mailbox.* — kind: "oauth" | "app_password".
   | "mailbox.connected"
-  | "mailbox.disconnected";
+  | "mailbox.disconnected"
+  // v1.1.3 — voice calibration lifecycle (Tay gate F) + wizard
+  // completion marker. voice.calibrated carries the path used
+  // (emails / describe / url / zero) so the hash chain reflects HOW
+  // the rubric was extracted; setup.completed marks the post-rubric
+  // wizard sub-flow finished.
+  | "voice.calibrated"
+  | "setup.completed";
 
 export type AuditEvent = {
   action: AuditAction;
