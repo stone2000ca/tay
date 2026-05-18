@@ -425,6 +425,60 @@ Append-only history of every /tay-build invocation. Each run gets one screen wit
 
 ---
 
-## Run #013 — (not yet started)
+## Run #013 — 2026-05-17 (~19 min) — **v1.1.2.5 (IMAP reply polling)**
 
-Next invocation picks up v1.1.2.5 — IMAP reply polling for SMTP mode. New `lib/reply/imap-poll.ts` using `imapflow`. Thread-matching by Message-ID / In-Reply-To headers (SMTP send sets these via nodemailer). New `imap_poll_cursor` table. `lib/reply/poll.ts` dispatches by `mailbox_credentials.kind`. Remove v1.1.2 interim banner once shipped.
+**Milestone:** v1.1.2.5 — IMAP reply polling for SMTP mode + remove interim banner
+**PR:** [#26](https://github.com/stone2000ca/tay/pull/26) — squashed as `e3b8168b`
+**Judge:** APPROVED first pass. 5/5 process, 5/5 product. **First clean-on-first-try v1.x run.**
+
+Migration 0013 `imap_poll_cursor`; `lib/reply/imap-poll.ts` via imapflow; `pollReplies()` channel-aware dispatcher; dual-anchor thread match in `handle.ts`. Cron route preserved (no vercel.json changes). 504 unit + 10 journey tests.
+
+Detailed checkpoint: `builds/checkpoints/run-013-2026-05-17.md`
+
+---
+
+## Run #014 — 2026-05-17 (~29 min) — **v1.1.3 (wizard polish)**
+
+**Milestone:** v1.1.3 — rubric preview + 4 voice cal paths + test-send + prospect quick-add (bundles P4 + P5 + P6)
+**PR:** [#27](https://github.com/stone2000ca/tay/pull/27) — squashed as `2a300f10`
+**Judge:** APPROVED first pass. 5/5 process, 5/5 product. **Second consecutive clean run.**
+
+Largest v1.1 milestone. 4 voice-cal paths (paste/describe/URL/zero) all require ≥1 real email anchor. Rubric preview/edit UI. Sample-draft "aha moment" via real generateDraft + judge. Test-send through FULL orchestrator. Prospect quick-add via cheap LLM + user-review-before-save. Migration 0014 setup_complete state. 535 unit + 10 journey tests.
+
+Detailed checkpoint: `builds/checkpoints/run-014-2026-05-17.md`
+
+v1.1.4 carry-forwards noted (later folded in): `/draft?prospectId=` prefill + SSRF allowlist.
+
+---
+
+## Run #015 — 2026-05-18 (~28 min) — **v1.1.4 (reply notifications) — FINAL v1.1 MILESTONE**
+
+**Milestone:** v1.1.4 — reply notifications + v1.1.3 carry-forwards
+**PR:** [#28](https://github.com/stone2000ca/tay/pull/28) — squashed as `6953633d`
+**Judge:** APPROVED first pass. 5/5 process, 5/5 product. **Third consecutive clean run.**
+
+Reply-notification dispatcher (email default; Slack webhook advanced; none option) wired into `handle.ts` as LAST step. Migration 0015 with encrypted webhook URL + intent allowlist. CRLF-stripping on email subject (header injection defense); 5s AbortController on Slack; webhook URL + reply body NEVER in notification payload or logs. v1.1.3 carry-forwards closed (prospect prefill + SSRF allowlist). 586 unit + 10 journey tests.
+
+Detailed checkpoint: `builds/checkpoints/run-015-2026-05-18.md`
+
+---
+
+## v1.1 cycle complete
+
+**Trend:** 3 consecutive clean first-pass APPROVALs (runs #013, #014, #015) after the v1.1.1/v1.1.2 fix-pass rounds. Foundation work was harder; composition work was smoother.
+
+| Milestone | Run | Process / Product |
+|---|---|---|
+| v1.1.1 secrets foundation | #011 | 4/4 (1 fix-pass) |
+| v1.1.2 SMTP send | #012 | 4/4 (1 fix-pass) |
+| v1.1.2.5 IMAP poll | #013 | 5/5 (clean) |
+| v1.1.3 wizard polish | #014 | 5/5 (clean) |
+| v1.1.4 reply notifications | #015 | 5/5 (clean) |
+
+**Install path after v1.1.4:** Vercel Deploy → wizard (LLM key → mailbox → voice → rubric preview → sample draft → test-send → first prospect) → done. ~10 minutes, zero terminal commands, zero Google Cloud Console for Easy-mode users.
+
+---
+
+## Run #016 — (awaiting user direction)
+
+Per `simplification-plan.md` v3: v1.1 is feature-complete. The next `/tay-build` invocation surfaces "v1.1 complete. Awaiting user kickoff for post-1.1 work." and waits.
