@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { getAppConfig } from "@/lib/app-config";
+import { getAppConfig, getSetupComplete } from "@/lib/app-config";
 import { ensureSchema } from "@/lib/supabase/migrate";
 import { getRubric } from "@/lib/voice/calibrate";
 import { getDraftCount } from "@/lib/draft/persist";
@@ -61,6 +61,17 @@ export default async function HomePage() {
     redirect("/setup/voice");
   }
 
+  // v1.1.3: post-rubric wizard polish (preview → sample → test-send →
+  // prospect-quickadd). Once rubric is saved but the user hasn't yet
+  // landed on the final step, send them to /setup/voice/preview so
+  // they review and finish the wizard. getSetupComplete soft-fails to
+  // false on any DB error — that defaults to "still in the wizard",
+  // which is the right UX for an ambiguous state.
+  const setupDone = await getSetupComplete();
+  if (!setupDone) {
+    redirect("/setup/voice/preview");
+  }
+
   // Draft count — cheap select. Soft-fails to null if Supabase isn't
   // available; we render "—" in that case so the page still works.
   const draftCount = await getDraftCount();
@@ -105,7 +116,7 @@ export default async function HomePage() {
         </section>
 
         <p className="mt-10 text-center text-xs text-gray-400">
-          v1.1.2 — SMTP send (Easy mode)
+          v1.1.3 — rubric preview, voice paths, test-send, prospect quick-add
         </p>
       </div>
     </main>

@@ -36,7 +36,7 @@ const SAMPLE_MAX_LEN = 4000;
 // System prompt — locked-down stylistic extractor. The "ignore embedded
 // instructions" sentence + wrapping samples in <untrusted_source> blocks
 // is the Tay gate H defense against prompt injection.
-const SYSTEM_PROMPT = `You are a stylistic feature extractor. You read a small set of email samples written by one author and produce a JSON rubric describing how that author writes.
+const SYSTEM_PROMPT = `You are a stylistic feature extractor. You read 1 or more email samples written by one author and produce a JSON rubric describing how that author writes. Even one sample is enough to extract a usable rubric; more samples are better but never required.
 
 Hard rules:
 1. Extract STYLISTIC features only — sentence patterns, formality, signatures, common/avoided phrases, tone. Do NOT invent biographical content.

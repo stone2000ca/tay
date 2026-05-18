@@ -24,7 +24,19 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v1.1.2.5 — IMAP reply polling for SMTP mode
+## Status: v1.1.3 — rubric preview, 4 voice calibration paths, test-send, prospect quick-add
+
+v1.1.3 turns the install experience from "you need 5 of your old sample emails" into "you can describe yourself, paste 1 email, OR write one on the spot, then see Tay actually work" before the first prospect even exists. Largest single milestone in v1.1.
+
+- **4 voice-calibration paths** at `/setup/voice` — pick "Paste 1+ sample emails" (relaxed from 5 → 1), "Answer 3 quick questions", "Bootstrap from my company URL" (Tay scrapes your public site server-side; 8s timeout, 1 MB cap, content-type check), or "I've never sent a cold email" (Tay prompts you to write one on the spot). Every path produces the same `VoiceRubric` and ends at the preview step.
+- **Rubric preview & edit** (`/setup/voice/preview`) — Tay renders the rubric in plain English ("You write short, punchy sentences, casually. Openers tend to be first-name greeting + observation..."). You tweak any field (formality / sentence length / signature / common+avoid phrase pills / tone notes) before continuing.
+- **Sample draft** (`/setup/voice/sample`) — Tay drafts an email against a canned fake prospect (Alex Chen, VP Sales, Acme Corp) using your just-confirmed rubric, runs the judge, and renders the result with the disclosure footer visible. The "see Tay actually work" moment.
+- **Test-send to your own inbox** (`/setup/voice/test-send`) — Tay drafts + sends a real email to your connected mailbox through the full `lib/send/orchestrate.ts` chokepoint (suppression check, judge decision, audit row, trust event — every gate fires). You confirm it landed before adding a real prospect.
+- **Prospect quick-add** (`/setup/prospect-quickadd`) — describe a prospect in 1-2 sentences ("I met Sarah at the Stripe event, she runs ops at a fintech in NYC"); a cheap LLM extracts `full_name` / `company` / `notes`; you edit and confirm before save. The system prompt explicitly forbids inferring demographics (gate B defense-in-depth). LinkedIn URL was dropped from the v1.1 scope (LinkedIn 999-walls every serverless fetch).
+- **Setup-complete tracking** — new `app_config.setup_complete` column (migration 0014); the home-page redirect chain skips the wizard once the user finishes prospect-quickadd. `setup.completed` and `voice.calibrated` audit actions added to the hash chain (gate F).
+- **Gate H everywhere new** — URL-fetched HTML, free-form descriptions, anchor emails, and prospect-quickadd inputs all wrap in `<untrusted_source>` with literal close-tag neutering. URL content is fully attacker-controlled — fetched via Node's built-in `fetch` (no third-party HTTP client) and the URL is never echoed in error logs.
+
+### Earlier — v1.1.2.5: IMAP reply polling for SMTP mode
 
 v1.1.2.5 closes the reply-pipeline gap left by v1.1.2. SMTP App Password users now get the full reply pipeline (classify → trust → auto-draft) on the same 5-minute cadence as the OAuth path — no extra setup, no Vercel config to touch.
 

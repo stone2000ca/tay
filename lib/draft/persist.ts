@@ -47,6 +47,9 @@ export async function upsertProspect(
   const full_name = inputs.full_name.trim();
   const company = inputs.company.trim();
   const notes = inputs.notes?.trim() ?? null;
+  // v1.1.3: callers may now pass a real email (test-send + prospect
+  // quick-add). When absent we fall back to the v0.4 synthesizer.
+  const realEmail = inputs.email?.trim();
 
   const existing = await supabase
     .from(PROSPECTS_TABLE)
@@ -60,10 +63,16 @@ export async function upsertProspect(
   }
 
   if (existing.data?.id) {
-    if (notes !== null) {
+    // If we now have a real email and the existing row is a v0.4
+    // placeholder, upgrade it so future sends work without requiring
+    // the user to re-add the prospect. (Same shape as notes upgrade.)
+    const updates: { notes?: string; email?: string } = {};
+    if (notes !== null) updates.notes = notes;
+    if (realEmail) updates.email = realEmail;
+    if (Object.keys(updates).length > 0) {
       const upd = await supabase
         .from(PROSPECTS_TABLE)
-        .update({ notes })
+        .update(updates)
         .eq("id", existing.data.id);
       if (upd.error) {
         throw new Error(
@@ -77,7 +86,9 @@ export async function upsertProspect(
   const ins = await supabase
     .from(PROSPECTS_TABLE)
     .insert({
-      email: synthesizePlaceholderEmail(full_name, company),
+      email: realEmail && realEmail.length > 0
+        ? realEmail
+        : synthesizePlaceholderEmail(full_name, company),
       full_name,
       company,
       notes,

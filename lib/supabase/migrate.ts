@@ -286,6 +286,17 @@ CREATE TABLE IF NOT EXISTS imap_poll_cursor (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 `,
+  "0014_setup_state.sql": `
+-- v1.1.3: track wizard completion so users aren't perpetually redirected
+-- through the post-rubric polish steps (preview → sample → test-send →
+-- prospect-quickadd). Once setup_complete=true, the /app/page.tsx
+-- redirect chain stops short of the wizard and lands on the dashboard.
+ALTER TABLE app_config
+  ADD COLUMN IF NOT EXISTS setup_complete boolean NOT NULL DEFAULT false;
+
+ALTER TABLE app_config
+  ADD COLUMN IF NOT EXISTS setup_completed_at timestamptz;
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -458,6 +469,12 @@ function sentinelFor(file: string): Sentinel {
       // pattern as gmail_poll_cursor; lib/reply/imap-poll.ts seeds the
       // lone row on first poll (no backfill).
       return { kind: "table", table: "imap_poll_cursor" };
+    case "0014_setup_state.sql":
+      // 0014 is ALTER-only — both columns added via ADD IF NOT EXISTS.
+      // The setup_complete column is the strictly-stronger signal: if
+      // it exists, the migration ran. (Same column-sentinel pattern as
+      // 0003's `notes` column on `prospects`.)
+      return { kind: "column", table: "app_config", column: "setup_complete" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.
