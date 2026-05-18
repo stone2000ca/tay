@@ -77,7 +77,14 @@ export type AuditAction =
   // the rubric was extracted; setup.completed marks the post-rubric
   // wizard sub-flow finished.
   | "voice.calibrated"
-  | "setup.completed";
+  | "setup.completed"
+  // v1.1.4 — reply notification lifecycle (Tay gate F). reply.notified
+  // is appended after every notifyReply() dispatch (success OR skip)
+  // and carries operational metadata only (channel, intent, notified,
+  // reason) — never the reply body or the Slack webhook URL.
+  // notifications.configured records a user preference change.
+  | "reply.notified"
+  | "notifications.configured";
 
 export type AuditEvent = {
   action: AuditAction;

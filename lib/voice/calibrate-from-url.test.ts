@@ -198,6 +198,101 @@ describe("extractRubricFromUrl", () => {
     expect(userMessage).not.toMatch(/<system>/);
   });
 
+  test("rejects SSRF target — loopback 127.0.0.1", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://127.0.0.1/secret",
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toMatch(/publicly accessible/i);
+  });
+
+  test("rejects SSRF target — localhost literal", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://localhost:8080/x",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects SSRF target — AWS instance metadata 169.254.169.254", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects SSRF target — GCP metadata.google.internal", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://metadata.google.internal/computeMetadata/v1/",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects SSRF target — RFC1918 10.x", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://10.0.0.42/internal",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects SSRF target — RFC1918 192.168.x", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "https://192.168.1.1/admin",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("rejects SSRF target — IPv6 loopback ::1", async () => {
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl({
+      anchorEmail,
+      companyUrl: "http://[::1]/admin",
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  test("accepts ordinary public hostname (allowlist happy path)", async () => {
+    chatOk(JSON.stringify(validRubric));
+    const { extractRubricFromUrl } = await import("./calibrate-from-url");
+    const result = await extractRubricFromUrl(
+      { anchorEmail, companyUrl: "https://example.com/about" },
+      {
+        fetchImpl: makeFakeFetch({
+          contentType: "text/html",
+          body: "<p>We help teams ship.</p>",
+        }),
+      },
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  test("isPublicHttpUrl direct unit checks", async () => {
+    const { isPublicHttpUrl } = await import("./calibrate-from-url");
+    expect(isPublicHttpUrl("https://example.com")).toBe(true);
+    expect(isPublicHttpUrl("http://example.com/path")).toBe(true);
+    expect(isPublicHttpUrl("ftp://example.com")).toBe(false);
+    expect(isPublicHttpUrl("https://localhost")).toBe(false);
+    expect(isPublicHttpUrl("https://server.localhost")).toBe(false);
+    expect(isPublicHttpUrl("https://10.0.0.1")).toBe(false);
+    expect(isPublicHttpUrl("https://172.20.0.1")).toBe(false);
+    expect(isPublicHttpUrl("https://172.32.0.1")).toBe(true); // outside 172.16-31
+    expect(isPublicHttpUrl("https://169.254.169.254")).toBe(false);
+    expect(isPublicHttpUrl("https://0.0.0.0")).toBe(false);
+    expect(isPublicHttpUrl("https://[fe80::1]")).toBe(false);
+    expect(isPublicHttpUrl("https://[fd00::1]")).toBe(false);
+  });
+
   test("neuter handles a literal close tag that survives stripping", async () => {
     // Pure-Unicode (no angle brackets) check that the neuter would
     // catch a close tag if the strip ever missed one. We invoke

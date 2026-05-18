@@ -207,6 +207,20 @@ export default async function SettingsPage({
         </form>
       </Section>
 
+      <Section title="Notifications (v1.1.4)">
+        <p className="text-sm text-gray-600">
+          When an inbound reply arrives, Tay can ping you via email
+          (default) or a Slack webhook. You can also narrow by intent so
+          only high-signal replies (e.g. &quot;interested&quot;) reach you.
+        </p>
+        <Link
+          href="/settings/notifications"
+          className="mt-3 inline-block rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+        >
+          Manage notification preferences →
+        </Link>
+      </Section>
+
       <Section title="Suppression list">
         <p className="text-sm text-gray-600">
           Emails on the suppression list never receive sends. The

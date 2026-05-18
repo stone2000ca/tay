@@ -297,6 +297,23 @@ ALTER TABLE app_config
 ALTER TABLE app_config
   ADD COLUMN IF NOT EXISTS setup_completed_at timestamptz;
 `,
+  "0015_notification_preferences.sql": `
+-- v1.1.4: reply notification preferences (single-row, single-tenant).
+-- Channel = email (default — zero extra setup), slack_webhook (Advanced),
+-- or none. Slack webhook URL stored encrypted (reuse lib/oauth/crypto).
+-- email_override lets the user send notifications elsewhere than their
+-- connected mailbox. enabled_for_intents is a comma-separated list of
+-- ReplyIntent values (default: ALL).
+CREATE TABLE IF NOT EXISTS notification_preferences (
+  lock_col integer NOT NULL DEFAULT 1 UNIQUE,
+  channel text NOT NULL CHECK (channel IN ('email', 'slack_webhook', 'none')) DEFAULT 'email',
+  slack_webhook_url_encrypted text,
+  email_override text,
+  enabled_for_intents text NOT NULL DEFAULT 'interested,not_interested,unsubscribe_request,out_of_office,other',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+`,
 };
 
 // Lexicographic order is the migration apply order. Filenames are
@@ -475,6 +492,13 @@ function sentinelFor(file: string): Sentinel {
       // it exists, the migration ran. (Same column-sentinel pattern as
       // 0003's `notes` column on `prospects`.)
       return { kind: "column", table: "app_config", column: "setup_complete" };
+    case "0015_notification_preferences.sql":
+      // 0015 creates the single notification_preferences table. Same
+      // single-row pattern as instance_secrets / mailbox_credentials /
+      // gmail_poll_cursor / imap_poll_cursor — the lone row is seeded
+      // lazily on first write (setPreferences); reads soft-fail to
+      // defaults when empty.
+      return { kind: "table", table: "notification_preferences" };
     default:
       // Unknown file — return an impossible table so the pre-check fails
       // closed and we re-run the SQL. Idempotent CREATEs make this safe.
