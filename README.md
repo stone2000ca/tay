@@ -24,9 +24,22 @@ No CLI. No Docker. No `npm install` on your machine.
 
 Cold-outbound AI tools that run on someone else's servers see every prospect you target and every draft you write. That's a lot of trust to outsource. Tay keeps the same code, but the data lives in *your* Supabase, *your* Gmail, *your* Vercel. Tay-the-author never sees a byte.
 
-## Status: v1.1.3 — rubric preview, 4 voice calibration paths, test-send, prospect quick-add
+## Status: v1.1.4 — reply notifications (v1.1 feature-complete)
 
-v1.1.3 turns the install experience from "you need 5 of your old sample emails" into "you can describe yourself, paste 1 email, OR write one on the spot, then see Tay actually work" before the first prospect even exists. Largest single milestone in v1.1.
+v1.1.4 is the final v1.1 milestone. With it, the install path is feature-complete: Vercel Deploy → wizard (LLM key → mailbox → voice → test-send → first prospect → notification channel) → done. Inbound replies now ping you the way you want to be pinged.
+
+- **Reply notifications** at `/settings/notifications` — when an inbound reply lands, Tay fans out a heads-up via your configured channel. Three options: **Email (default)** sends through your already-connected mailbox (Gmail OAuth or SMTP App Password) so zero setup is required for non-tech users. **Slack webhook (advanced)** posts to an incoming-webhook URL you paste — linked guide for the 2-minute Slack setup. **None** suppresses notifications entirely. You can narrow to specific intents (e.g. only `interested` replies) for higher-signal pings.
+- **Notification dispatcher** — `lib/notify/dispatch.ts` is the single chokepoint. Reuses the channel-aware send transports (`lib/send/gmail.ts` + `lib/send/smtp.ts`) for email; uses native `fetch` with a 5s timeout for Slack. Bypasses the judge/disclosure gates with documented rationale: notifications are operator-bound (going to YOU), not prospect-bound. Best-effort like the audit and trust paths — never throws, never blocks the reply pipeline. Writes a `reply.notified` audit entry on every dispatch (gate F).
+- **Privacy posture** — notification payloads never include the reply body. Just the classification intent, sender (sanitized), classifier reasons (already-neutered by gate H), and a link to `/replies` in your Tay instance. The Slack webhook URL is encrypted at rest (same AES-256-GCM as OAuth tokens) and never logged.
+- **Test notification button** — sends a synthetic notification through your configured channel so you can verify it works without waiting for a real reply.
+- **Notification preferences schema** — migration `0015_notification_preferences.sql` adds a single-row table (`lock_col UNIQUE DEFAULT 1`, same pattern as the rest of Tay's singletons).
+- **v1.1.3 carry-forwards from the judge:**
+  - `/draft?prospectId=<uuid>` pre-fills the form so the prospect-quickadd → draft handoff is one click, not three retypes (new `getProspect()` read in `lib/draft/persist.ts`).
+  - **SSRF allowlist** on the URL-fetch path in `lib/voice/calibrate-from-url.ts`. Rejects loopback (127.x), RFC1918 private (10/8, 172.16/12, 192.168/16), link-local (169.254/16 — covers cloud metadata at 169.254.169.254), IPv6 loopback (::1) + unique-local (fc00::/7) + link-local (fe80::/10), and literal hosts (`localhost`, `metadata.google.internal`, `instance-data`). Pure string check — no DNS lookup latency; DNS-rebinding caveat documented in the source.
+
+### Earlier — v1.1.3: rubric preview, 4 voice calibration paths, test-send, prospect quick-add
+
+v1.1.3 turned the install experience from "you need 5 of your old sample emails" into "you can describe yourself, paste 1 email, OR write one on the spot, then see Tay actually work" before the first prospect even exists. Largest single milestone in v1.1.
 
 - **4 voice-calibration paths** at `/setup/voice` — pick "Paste 1+ sample emails" (relaxed from 5 → 1), "Answer 3 quick questions", "Bootstrap from my company URL" (Tay scrapes your public site server-side; 8s timeout, 1 MB cap, content-type check), or "I've never sent a cold email" (Tay prompts you to write one on the spot). Every path produces the same `VoiceRubric` and ends at the preview step.
 - **Rubric preview & edit** (`/setup/voice/preview`) — Tay renders the rubric in plain English ("You write short, punchy sentences, casually. Openers tend to be first-name greeting + observation..."). You tweak any field (formality / sentence length / signature / common+avoid phrase pills / tone notes) before continuing.

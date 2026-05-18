@@ -62,6 +62,7 @@ import { getRubric } from "../voice/calibrate";
 import { getReplySettings } from "./settings";
 import { classifyReply, type ReplyIntent } from "./classify";
 import { generateReplyDraft } from "./draft";
+import { notifyReply } from "../notify/dispatch";
 
 const REPLIES_TABLE = "replies";
 const SENT_TABLE = "sent_messages";
@@ -385,6 +386,32 @@ export async function handleReply(args: {
     }
   }
   // intent === "other" → no trust event; no auto-reply.
+
+  // -- 5b NOTIFY (v1.1.4 — best-effort) ----------------------------------
+  //
+  // Fan out a heads-up to the user via their configured channel (email
+  // by default; Slack webhook for advanced users; or "none" to suppress).
+  // notifyReply is bounded (5s timeout on Slack, similar on email send),
+  // never throws, and writes its own `reply.notified` audit entry. It's
+  // the LAST step, not a gate — a notification failure must not break
+  // the reply pipeline.
+  try {
+    await notifyReply({
+      reply: {
+        from: args.fromEmail,
+        subject: args.subject,
+        receivedAt: args.receivedAt,
+      },
+      classification: classification.classification,
+      matchedSendId: matched.id,
+    });
+  } catch (err) {
+    // Defense in depth — notifyReply already swallows its own errors.
+    console.warn(
+      "[reply/handle] notifyReply threw (best-effort, swallowed):",
+      err instanceof Error ? err.message : String(err),
+    );
+  }
 
   // -- 6 AUDIT (received) ------------------------------------------------
   await appendAudit({

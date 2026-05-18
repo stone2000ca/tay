@@ -145,6 +145,55 @@ export async function saveDraft(args: {
 }
 
 /**
+ * Read a single prospect by id. Used by the /draft?prospectId=... prefill
+ * (v1.1.4 carry-forward from the v1.1.3 judge): the prospect-quickadd
+ * step writes the prospect, then redirects to /draft so the user can
+ * generate a real email — pre-fill the form fields with the prospect's
+ * existing data so the user isn't asked to retype.
+ *
+ * READ function — soft-fails to null. Page render must always work.
+ */
+export async function getProspect(id: string): Promise<{
+  id: string;
+  full_name: string;
+  company: string;
+  notes: string | null;
+  email: string;
+} | null> {
+  if (!hasSupabaseEnv() || !id) return null;
+  try {
+    const supabase = getSupabaseServerClient();
+    const { data, error } = await supabase
+      .from(PROSPECTS_TABLE)
+      .select("id, full_name, company, notes, email")
+      .eq("id", id)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as {
+      id: string;
+      full_name: string | null;
+      company: string | null;
+      notes: string | null;
+      email: string | null;
+    };
+    return {
+      id: row.id,
+      full_name: row.full_name ?? "",
+      company: row.company ?? "",
+      notes: row.notes,
+      email: row.email ?? "",
+    };
+  } catch (err) {
+    console.warn(
+      "[persist] getProspect failed:",
+      err instanceof Error ? err.message : String(err),
+    );
+    return null;
+  }
+}
+
+/**
  * Cheap count of all drafts. Used by the dashboard. Soft-fails to null
  * if Supabase isn't available — page render must always work.
  *

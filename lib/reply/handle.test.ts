@@ -54,6 +54,13 @@ vi.mock("../trust/record", () => ({
   recordTrustEvent: (...a: unknown[]) => recordTrustEventMock(...a),
 }));
 
+const notifyReplyMock = vi.fn<(a: unknown) => Promise<{ notified: boolean; channel: string }>>(
+  async () => ({ notified: true, channel: "email" }),
+);
+vi.mock("../notify/dispatch", () => ({
+  notifyReply: (a: unknown) => notifyReplyMock(a),
+}));
+
 // Supabase mock with programmable per-query results.
 type ChainResult = { data?: unknown; error?: { message?: string; code?: string } | null };
 class FakeQuery {
@@ -104,6 +111,8 @@ beforeEach(() => {
   addSuppressionMock.mockClear();
   appendAuditMock.mockClear();
   recordTrustEventMock.mockClear();
+  notifyReplyMock.mockClear();
+  notifyReplyMock.mockResolvedValue({ notified: true, channel: "email" });
   hasSupabaseEnvMock.mockReturnValue(true);
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
@@ -479,5 +488,87 @@ describe("handleReply — v1.1.2.5 dual thread anchor + channel tag", () => {
     const payload = (receivedCalls[0][0] as { payload: Record<string, unknown> })
       .payload;
     expect(payload).toHaveProperty("channel", "oauth");
+  });
+});
+
+describe("handleReply — v1.1.4 notifyReply integration", () => {
+  function setupMatchedFlow(intent: string) {
+    const sentQ = freshQuery();
+    sentQ.result = {
+      data: {
+        id: "sent-1",
+        draft_id: "draft-1",
+        prospect_id: "prospect-1",
+        subject: "Hi Alice",
+        body: "original outbound body",
+      },
+      error: null,
+    };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    const updQ = freshQuery();
+    updQ.result = { data: null, error: null };
+    classifyMock.mockResolvedValue({
+      ok: true,
+      classification: { intent, confidence: 0.9, reasons: ["x"] },
+      modelUsed: "test/cheap",
+    });
+  }
+
+  test("matched flow → notifyReply called with classification + matchedSendId", async () => {
+    setupMatchedFlow("interested");
+    const { handleReply } = await import("./handle");
+    await handleReply(baseArgs);
+    expect(notifyReplyMock).toHaveBeenCalledTimes(1);
+    const arg = notifyReplyMock.mock.calls[0][0] as {
+      reply: { from: string };
+      classification: { intent: string };
+      matchedSendId: string | null;
+    };
+    expect(arg.reply.from).toBe("alice@example.com");
+    expect(arg.classification.intent).toBe("interested");
+    expect(arg.matchedSendId).toBe("sent-1");
+  });
+
+  test("notifyReply throws → handler swallows and still finishes (audit reply.received still fires)", async () => {
+    setupMatchedFlow("interested");
+    notifyReplyMock.mockRejectedValueOnce(new Error("notify blew up"));
+    const { handleReply } = await import("./handle");
+    const out = await handleReply(baseArgs);
+    expect(out.ok).toBe(true);
+    expect(appendAuditMock).toHaveBeenCalledWith(
+      expect.objectContaining({ action: "reply.received" }),
+    );
+  });
+
+  test("notifyReply NOT called on skip path (no thread match)", async () => {
+    const sentQ = freshQuery();
+    sentQ.result = { data: null, error: null };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    const { handleReply } = await import("./handle");
+    await handleReply(baseArgs);
+    expect(notifyReplyMock).not.toHaveBeenCalled();
+  });
+
+  test("notifyReply NOT called on classifier failure", async () => {
+    const sentQ = freshQuery();
+    sentQ.result = {
+      data: {
+        id: "sent-1",
+        draft_id: "draft-1",
+        prospect_id: "prospect-1",
+        subject: "Hi",
+        body: "body",
+      },
+      error: null,
+    };
+    const insQ = freshQuery();
+    insQ.result = { data: { id: "reply-1" }, error: null };
+    classifyMock.mockResolvedValue({ ok: false, error: "LLM down" });
+
+    const { handleReply } = await import("./handle");
+    await handleReply(baseArgs);
+    expect(notifyReplyMock).not.toHaveBeenCalled();
   });
 });

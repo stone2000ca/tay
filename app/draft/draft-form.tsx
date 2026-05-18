@@ -16,7 +16,14 @@ type Status =
       judgeError?: string;
     };
 
-export function DraftForm() {
+type Prefill = {
+  full_name?: string;
+  company?: string;
+  notes?: string;
+  email?: string;
+};
+
+export function DraftForm({ prefill }: { prefill?: Prefill } = {}) {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [pending, startTransition] = useTransition();
 
@@ -74,6 +81,7 @@ export function DraftForm() {
               type="text"
               required
               maxLength={200}
+              defaultValue={prefill?.full_name ?? ""}
               placeholder="Jordan Riley"
               className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
             />
@@ -92,6 +100,7 @@ export function DraftForm() {
               type="text"
               required
               maxLength={200}
+              defaultValue={prefill?.company ?? ""}
               placeholder="Acme Robotics"
               className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
             />
@@ -109,6 +118,7 @@ export function DraftForm() {
               name="notes"
               rows={3}
               maxLength={2000}
+              defaultValue={prefill?.notes ?? ""}
               placeholder="Anything specific you want Tay to mention?"
               className="mt-2 block w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-gray-900 focus:outline-none focus:ring-1 focus:ring-gray-900"
             />

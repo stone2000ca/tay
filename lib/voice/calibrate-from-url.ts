@@ -85,6 +85,19 @@ export async function extractRubricFromUrl(
       error: "Provide a full http(s) company URL (e.g. https://example.com).",
     };
   }
+  // v1.1.4 carry-forward (SSRF allowlist): reject hostnames that point
+  // at loopback / RFC1918 private space / link-local / cloud-metadata
+  // endpoints. Without this, a malicious actor (or a confused user) could
+  // ask Tay to fetch http://169.254.169.254/latest/meta-data/ — the AWS
+  // EC2 instance metadata service — and we'd happily wrap the result in
+  // an <untrusted_source> block and ship it to an LLM. Same defense
+  // pattern as a server-side webhook ingester.
+  if (!isPublicHttpUrl(url)) {
+    return {
+      ok: false,
+      error: "URL must be publicly accessible (no private / loopback / metadata hosts).",
+    };
+  }
 
   // -- Fetch the URL (timeout + size cap + content-type check) ---------
 
@@ -167,6 +180,105 @@ function isHttpUrl(s: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * SSRF allowlist — accept ONLY http(s) URLs whose host is NOT a private,
+ * loopback, link-local, or cloud-metadata literal. We do this with a
+ * pure string check on the host rather than a DNS lookup:
+ *
+ *   - DNS lookup adds 100ms+ to wizard latency for every URL paste.
+ *   - The threat model here is "wizard user pastes a URL" — not a
+ *     persistent service ingesting attacker-controlled hostnames at high
+ *     volume. The high-value targets are well-known literals (127.x,
+ *     10.x, 172.16-31.x, 192.168.x, 169.254.169.254, "localhost", etc.).
+ *   - A DNS-rebinding attacker could resolve a public name to a private
+ *     IP at fetch time; for v1.1.4 we accept that residual risk and
+ *     document it. Mitigation lives in v1.2+ if the threat materializes
+ *     (e.g. resolve hostname, pin the IP, fetch by IP).
+ *
+ * Exported for tests.
+ */
+export function isPublicHttpUrl(s: string): boolean {
+  if (!isHttpUrl(s)) return false;
+  let u: URL;
+  try {
+    u = new URL(s);
+  } catch {
+    return false;
+  }
+  // Node's URL.hostname returns IPv6 literals with surrounding brackets
+  // ("[fe80::1]"). Strip them so the checks below see the raw address.
+  let host = u.hostname.toLowerCase();
+  if (host.startsWith("[") && host.endsWith("]")) {
+    host = host.slice(1, -1);
+  }
+  if (host.length === 0) return false;
+
+  // Literal hostnames we never want to fetch.
+  const BLOCKED_LITERALS = new Set([
+    "localhost",
+    "localhost.localdomain",
+    "ip6-localhost",
+    "ip6-loopback",
+    "metadata.google.internal",
+    "metadata",
+    "instance-data",
+    "instance-data.ec2.internal",
+  ]);
+  if (BLOCKED_LITERALS.has(host)) return false;
+  if (host.endsWith(".localhost")) return false;
+  if (host.endsWith(".internal")) return false; // *.compute.internal (GCP/AWS)
+
+  // IPv4 literal? Reject loopback / private / link-local / metadata.
+  if (isIPv4(host)) {
+    const [a, b] = host.split(".").map((p) => Number(p));
+    // 0.0.0.0/8 (current network, often abused to alias loopback)
+    if (a === 0) return false;
+    // 127.0.0.0/8 (loopback)
+    if (a === 127) return false;
+    // 10.0.0.0/8 (RFC1918 private)
+    if (a === 10) return false;
+    // 172.16.0.0/12 (RFC1918 private)
+    if (a === 172 && b >= 16 && b <= 31) return false;
+    // 192.168.0.0/16 (RFC1918 private)
+    if (a === 192 && b === 168) return false;
+    // 169.254.0.0/16 (link-local) — covers 169.254.169.254 metadata.
+    if (a === 169 && b === 254) return false;
+    // 100.64.0.0/10 (CGNAT — rarely public, often used inside cloud nets)
+    if (a === 100 && b >= 64 && b <= 127) return false;
+    return true;
+  }
+
+  // IPv6 literal? Hostname comes from URL.hostname which strips brackets.
+  if (host.includes(":")) {
+    // ::1 loopback (also written as 0000:...0001)
+    if (host === "::1") return false;
+    // fc00::/7 (unique local — fc.. / fd..)
+    if (/^fc[0-9a-f]{2}:/.test(host) || /^fd[0-9a-f]{2}:/.test(host)) return false;
+    // fe80::/10 (link-local) — fe80, fe90, fea0, feb0 prefixes
+    if (/^fe[89ab][0-9a-f]:/.test(host)) return false;
+    // IPv4-mapped IPv6 (::ffff:127.0.0.1 etc.) — best-effort string check.
+    if (/::ffff:127\./i.test(host)) return false;
+    if (/::ffff:10\./i.test(host)) return false;
+    if (/::ffff:192\.168\./i.test(host)) return false;
+    if (/::ffff:169\.254\./i.test(host)) return false;
+    return true;
+  }
+
+  // Hostname — accept. (DNS rebinding caveat documented above.)
+  return true;
+}
+
+function isIPv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return false;
+    const n = Number(p);
+    if (n < 0 || n > 255) return false;
+  }
+  return true;
 }
 
 type FetchResult =
