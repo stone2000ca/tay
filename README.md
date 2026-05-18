@@ -14,11 +14,11 @@ Tay finds prospects, writes them in your voice, and books meetings — running o
 
 ## Install in 3 steps
 
-1. **Click the Deploy button above.** Vercel forks this repo into your account and prompts you for env vars.
-2. **Connect Supabase** via the Vercel Marketplace once your project is created. Tay runs migrations on first boot — the first page load after the integration finishes creates the `app_config`, `prospects`, and `audit_log` tables idempotently.
-3. **Open your Tay URL** (Vercel shows it after deploy). The setup wizard walks you through Gmail connect, voice calibration, and your first ICP.
+1. **Click the Deploy button above.** Vercel forks this repo into your account and builds it. No env vars asked at deploy time — they're collected by the in-app wizard or auto-set by integrations.
+2. **Connect Supabase** via Vercel's Storage tab → Browse Marketplace → Supabase. Vercel auto-provisions a Supabase project and writes the database env vars for you. Trigger a redeploy.
+3. **Open your Tay URL** and walk the wizard: paste an LLM key (Anthropic / OpenAI / OpenRouter) → connect a mailbox (Easy = Gmail App Password, ~2 min) → calibrate voice → preview rubric → test-send to yourself → add first prospect.
 
-No CLI. No Docker. No `npm install` on your machine.
+No CLI. No Docker. No `npm install` on your machine. **See [DEPLOY.md](./DEPLOY.md) for a screenshot-by-screenshot walkthrough.**
 
 ## Why self-hosted?
 
@@ -102,8 +102,8 @@ Runs `vitest run journeys` — the 10 adversarial scenarios + an aggregated summ
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Auto-set by the integration | yes |
 | `SUPABASE_SERVICE_ROLE_KEY` | Auto-set by the integration. v1.1.1: used as HKDF IKM for the OAuth/unsubscribe/cron secrets | yes |
 | `POSTGRES_URL`, `POSTGRES_URL_NON_POOLING` | Auto-set by the integration. Used by the migration runner | yes |
-| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID from Google Cloud Console — required for the send path | yes (v0.7+) |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret paired with the ID above | yes (v0.7+) |
+| `GOOGLE_OAUTH_CLIENT_ID` | OAuth client ID from Google Cloud Console — Power mode only | optional (Easy mode skips this) |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | OAuth client secret paired with the ID above — Power mode only | optional (Easy mode skips this) |
 | `NEXT_PUBLIC_SITE_URL` | Public URL of your Tay deploy. v1.1.1: falls back to `VERCEL_PROJECT_PRODUCTION_URL` / `VERCEL_URL` so it's optional on Vercel | optional |
 | `OPENROUTER_MODEL_CHEAP` | Override the default cheap OpenRouter model | optional |
 | `OPENROUTER_MODEL_QUALITY` | Override the default quality OpenRouter model | optional |
